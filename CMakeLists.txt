@@ -27,12 +27,26 @@ set(CGAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/CGAL-6.1.1")
 find_package(CGAL REQUIRED)
 
 # --- Qt Quick 3D ---
-find_package(Qt6 REQUIRED COMPONENTS Quick Quick3D)
+find_package(Qt6 REQUIRED COMPONENTS Quick Quick3D Core)
 
 qt_standard_project_setup(REQUIRES 6.8)
 
+# Source files for the Block Model engine
+set(BLOCK_MODEL_SOURCES
+    src/BlockModel/Reader.cpp
+    src/BlockModel/SpatialIndex.cpp
+    src/BlockModel/Instancing.cpp
+    src/BlockModel/MicromineReader.cpp
+)
+
 qt_add_executable(appMiningSchedule
     main.cpp
+    ${BLOCK_MODEL_SOURCES}
+)
+
+target_include_directories(appMiningSchedule PRIVATE 
+    include
+    third_party
 )
 
 qt_add_qml_module(appMiningSchedule
