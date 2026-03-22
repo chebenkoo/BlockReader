@@ -19,15 +19,25 @@ BlockModelProvider::BlockModelProvider(QQuick3DObject *parent) : QQuick3DInstanc
 BlockModelProvider::~BlockModelProvider() = default;
 
 void BlockModelProvider::autoComputeRange() {
-    if (!m_model) return;
+    if (!m_model || m_model->attributes.empty()) return;
     auto it = m_model->attributes.find(m_colorAttribute.toStdString());
     if (it != m_model->attributes.end() && !it->second.empty()) {
-        float min = *std::min_element(it->second.begin(), it->second.end());
-        float max = *std::max_element(it->second.begin(), it->second.end());
-        m_minRange = min;
-        m_maxRange = max;
-        std::cout << "Auto-Range for " << m_colorAttribute.toStdString() << ": [" << min << ", " << max << "]" << std::endl;
-        emit rangeChanged();
+        const auto& vec = it->second;
+        float min = 1e30f, max = -1e30f;
+        bool found = false;
+        for (float v : vec) {
+            if (std::isfinite(v)) {
+                min = std::min(min, v);
+                max = std::max(max, v);
+                found = true;
+            }
+        }
+        if (found) {
+            m_minRange = min;
+            m_maxRange = (max > min) ? max : min + 1.0f;
+            std::cout << "GPU DEBUG: Color Range [" << m_minRange << " to " << m_maxRange << "] for " << m_colorAttribute.toStdString() << std::endl;
+            emit rangeChanged();
+        }
     }
 }
 
@@ -49,10 +59,18 @@ void BlockModelProvider::setColorAttribute(const QString &attr) {
 void BlockModelProvider::setMinRange(float val) { m_minRange = val; emit rangeChanged(); markDirty(); }
 void BlockModelProvider::setMaxRange(float val) { m_maxRange = val; emit rangeChanged(); markDirty(); }
 void BlockModelProvider::setMinGrade(float val) { m_minGrade = val; emit minGradeChanged(); markDirty(); }
-void BlockModelProvider::setBlockSize(float val) { m_blockSize = val; emit blockSizeChanged(); markDirty(); }
+void BlockModelProvider::setBlockSize(float val) { if (m_blockSize != val) { m_blockSize = val; emit blockSizeChanged(); markDirty(); } }
+
+void BlockModelProvider::setModelRotation(float rx, float ry, float rz) {
+    m_rotX = rx; m_rotY = ry; m_rotZ = rz;
+    markDirty();
+}
 
 QByteArray BlockModelProvider::getInstanceBuffer(int *instanceCount) {
-    if (!m_model || m_model->empty()) { *instanceCount = 0; return QByteArray(); }
+    if (!m_model || m_model->empty()) {
+        *instanceCount = 0;
+        return QByteArray();
+    }
 
     const size_t count = m_model->size();
     QByteArray instanceData;
@@ -69,35 +87,35 @@ QByteArray BlockModelProvider::getInstanceBuffer(int *instanceCount) {
 
     int addedCount = 0;
     for (size_t i = 0; i < count; ++i) {
-        if (!std::isfinite(m_model->x[i]) || !std::isfinite(m_model->y[i])) continue;
+        // --- CRITICAL FINITE CHECK ---
+        if (!std::isfinite(m_model->x[i]) || !std::isfinite(m_model->y[i]) || !std::isfinite(m_model->z[i])) continue;
         if (!m_model->visible.empty() && m_model->visible[i] == 0) continue;
         
         float gradeVal = (gradeValues && i < gradeValues->size()) ? (*gradeValues)[i] : 0.0f;
-        if (gradeVal < m_minGrade) continue;
+        if (std::isfinite(gradeVal) && gradeVal < m_minGrade) continue;
 
-        // --- AXIS REMAP (Mining -> Qt Quick 3D) ---
-        // Mining: X=East, Y=North, Z=Elev
-        // Qt:     X=Right, Y=Up, Z=Backward (we use -Y for Forward)
+        // Position Remap (Z-up to Y-up)
         entry[addedCount].position = QVector3D(
-            static_cast<float>(m_model->x[i]),      // East -> X
-            static_cast<float>(m_model->z[i]),      // Elev -> Y (UP)
-            static_cast<float>(-m_model->y[i])      // North -> -Z (Depth)
+            static_cast<float>(m_model->x[i]),
+            static_cast<float>(m_model->z[i]),
+            static_cast<float>(-m_model->y[i])
         );
 
-        // --- SCALE REMAP ---
-        float sx = (m_model->x_span.size() > i) ? m_model->x_span[i] * 2.0f : 10.0f;
-        float sy = (m_model->z_span.size() > i) ? m_model->z_span[i] * 2.0f : 5.0f; // Z -> Y
-        float sz = (m_model->y_span.size() > i) ? m_model->y_span[i] * 2.0f : 10.0f; // Y -> Z
+        // Scale Logic
+        float sx = (m_model->x_span.size() > i && std::isfinite(m_model->x_span[i])) ? m_model->x_span[i] * 2.0f : 10.0f;
+        float sy = (m_model->z_span.size() > i && std::isfinite(m_model->z_span[i])) ? m_model->z_span[i] * 2.0f : 5.0f;
+        float sz = (m_model->y_span.size() > i && std::isfinite(m_model->y_span[i])) ? m_model->y_span[i] * 2.0f : 10.0f;
 
         entry[addedCount].scale = QVector3D(sx * m_blockSize, sy * m_blockSize, sz * m_blockSize);
+        entry[addedCount].eulerRotation = QVector3D(m_rotX, m_rotY, m_rotZ);
 
-        // --- COLOR ---
-        float value = (attrValues && i < attrValues->size()) ? (*attrValues)[i] : 0.0f;
-        QColor color = mapValueToColor(value);
-        entry[addedCount].color = QVector4D(color.redF(), color.greenF(), color.blueF(), color.alphaF());
+        float val = (attrValues && i < attrValues->size()) ? (*attrValues)[i] : 0.0f;
+        if (!std::isfinite(val)) val = m_minRange; // Default to min of range if invalid
         
-        entry[addedCount].eulerRotation = QVector3D(0, 0, 0);
-        entry[addedCount].customData = QVector4D(value, 0, 0, 0);
+        QColor color = mapValueToColor(val);
+        entry[addedCount].color = QVector4D(color.redF(), color.greenF(), color.blueF(), 1.0f);
+        entry[addedCount].customData = QVector4D(val, 0, 0, 0);
+
         addedCount++;
     }
 
@@ -107,8 +125,9 @@ QByteArray BlockModelProvider::getInstanceBuffer(int *instanceCount) {
 }
 
 QColor BlockModelProvider::mapValueToColor(float value) const {
-    if (m_maxRange <= m_minRange) return Qt::white;
-    float t = std::clamp((value - m_minRange) / (m_maxRange - m_minRange), 0.0f, 1.0f);
+    float range = m_maxRange - m_minRange;
+    if (std::abs(range) < 0.0001f) return Qt::red;
+    float t = std::clamp((value - m_minRange) / range, 0.0f, 1.0f);
     return QColor::fromHsvF((1.0f - t) * 0.66f, 1.0, 1.0);
 }
 

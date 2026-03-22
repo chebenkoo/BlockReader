@@ -9,11 +9,6 @@
 
 namespace Mining {
 
-/**
- * @brief High-performance bridge between BlockModelSoA and Qt Quick 3D.
- * 
- * Provides instance data (positions, colors) for millions of voxels.
- */
 class BlockModelProvider : public QQuick3DInstancing {
     Q_OBJECT
     Q_PROPERTY(QString colorAttribute READ colorAttribute WRITE setColorAttribute NOTIFY colorAttributeChanged)
@@ -26,13 +21,11 @@ public:
     explicit BlockModelProvider(QQuick3DObject *parent = nullptr);
     ~BlockModelProvider();
 
-    // Set the data source
     void setModel(const BlockModelSoA* model);
+    void setModelRotation(float rx, float ry, float rz);
 
-    // QQuick3DInstancing interface
     QByteArray getInstanceBuffer(int *instanceCount) override;
 
-    // Properties
     QString colorAttribute() const { return m_colorAttribute; }
     void setColorAttribute(const QString &attr);
 
@@ -62,6 +55,7 @@ private:
     float m_maxRange = 1.0f;
     float m_minGrade = 0.0f;
     float m_blockSize = 1.0f;
+    float m_rotX = 0, m_rotY = 0, m_rotZ = 0;
     
     QColor mapValueToColor(float value) const;
 };
