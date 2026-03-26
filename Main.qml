@@ -46,20 +46,6 @@ Window {
                 ComboBox { id: comboZ; model: modelController.availableFields; currentIndex: Math.max(0, model.indexOf("RL")); Layout.fillWidth: true }
             }
 
-            Label { text: "Map Block Spans (Half-Widths):"; font.bold: true }
-            RowLayout {
-                Label { text: "X Span:"; Layout.preferredWidth: 50 }
-                ComboBox { id: comboXS; model: modelController.availableFields; currentIndex: Math.max(0, model.indexOf("_EAST")); Layout.fillWidth: true }
-            }
-            RowLayout {
-                Label { text: "Y Span:"; Layout.preferredWidth: 50 }
-                ComboBox { id: comboYS; model: modelController.availableFields; currentIndex: Math.max(0, model.indexOf("_NORTH")); Layout.fillWidth: true }
-            }
-            RowLayout {
-                Label { text: "Z Span:"; Layout.preferredWidth: 50 }
-                ComboBox { id: comboZS; model: modelController.availableFields; currentIndex: Math.max(0, model.indexOf("_RL")); Layout.fillWidth: true }
-            }
-
             Label { text: "Map Attributes:"; font.bold: true }
             RowLayout {
                 Label { text: "Grade:"; Layout.preferredWidth: 50 }
@@ -74,9 +60,6 @@ Window {
                         "X": comboX.currentText,
                         "Y": comboY.currentText,
                         "Z": comboZ.currentText,
-                        "XSPAN": comboXS.currentText,
-                        "YSPAN": comboYS.currentText,
-                        "ZSPAN": comboZS.currentText,
                         "Grade": comboGrade.currentText
                     })
                     mappingDialog.close()
@@ -101,35 +84,19 @@ Window {
             Model {
                 id: voxelModel
                 source: "#Cube"
-                // #Cube in Qt Quick 3D is 100×100×100 units.
-                // Dividing by 100 makes it a 1×1×1 unit cube so that instance
-                // scale values (which are in metres) map 1-to-1.
-                scale: Qt.vector3d(0.01, 0.01, 0.01)
-                materials: [
-                    PrincipledMaterial {
-                        baseColor: "white"
-                        lighting: PrincipledMaterial.NoLighting
-                        opacity: 0.95
-                    }
-                ]
+                scale: Qt.vector3d(0.1, 0.1, 0.1)
+                materials: [ PrincipledMaterial { baseColor: "white"; lighting: PrincipledMaterial.NoLighting } ]
                 instancing: BlockModelProvider {
                     id: blockProvider
                     objectName: "blockProvider"
                     colorAttribute: "Grade"
-                    blockSize: 0.8 // Default to 80% to see the grid structure
+                    blockSize: 1.0
                 }
             }
         }
 
         DirectionalLight { eulerRotation.x: -30; eulerRotation.y: -70 }
-        
-        PerspectiveCamera { 
-            id: mainCamera
-            position: Qt.vector3d(modelController.modelRadius, modelController.modelRadius, modelController.modelRadius)
-            lookAtNode: blockModelNode
-            clipFar: 500000
-            clipNear: 10 // Increase near clip to prevent inside-block artifacts
-        }
+        PerspectiveCamera { id: mainCamera; position: Qt.vector3d(0, 0, 1000); lookAtNode: blockModelNode; clipFar: 100000; clipNear: 1 }
         
         OrbitCameraController { 
             origin: blockModelNode
@@ -151,28 +118,30 @@ Window {
                 Layout.fillWidth: true
                 enabled: modelController.status.includes("Loaded")
                 onClicked: {
-                    var dist = Math.max(1000, modelController.modelRadius * 1.5)
-                    mainCamera.position = Qt.vector3d(dist, dist, dist)
+                    mainCamera.position = Qt.vector3d(0, 0, 2000)
                     mainCamera.lookAt(blockModelNode)
                 }
             }
             Text { text: "Visualization"; color: "white"; font.bold: true }
             Label { text: "Color By:"; color: "#aaa" }
             ComboBox {
-                id: colorAttrCombo
                 Layout.fillWidth: true
                 model: modelController.availableFields
+                // Default to Grade or AuCut so the colour is meaningful on first load
+                currentIndex: {
+                    var g = model.indexOf("Grade");
+                    if (g >= 0) return g;
+                    var a = model.indexOf("AuCut");
+                    if (a >= 0) return a;
+                    return 0;
+                }
                 onCurrentTextChanged: blockProvider.colorAttribute = currentText
             }
-            Label { text: "Block Size (Scale):"; color: "#aaa" }
-            Slider { 
-                id: sizeSlider
-                Layout.fillWidth: true; from: 0.01; to: 2.0; value: 0.8; 
-                onValueChanged: blockProvider.blockSize = value 
-            }
+            Label { text: "Block Size:"; color: "#aaa" }
+            Slider { Layout.fillWidth: true; from: 0.1; to: 20.0; value: 0.8; onValueChanged: blockProvider.blockSize = value }
 
             Label { text: "Grade Cutoff:"; color: "#aaa" }
-            Slider { id: gradeSlider; Layout.fillWidth: true; from: 0.0; to: 10.0; value: 0.0; onValueChanged: blockProvider.minGrade = value }
+            Slider { id: gradeSlider; Layout.fillWidth: true; from: 0.0; to: 5.0; value: 0.0; onValueChanged: blockProvider.minGrade = value }
             Text { text: "Min: " + gradeSlider.value.toFixed(2); color: "white"; font.pixelSize: 10 }
 
             Item { Layout.fillHeight: true }

@@ -14,9 +14,6 @@
 using namespace Qt::StringLiterals;
 using namespace Mining;
 
-/**
- * @brief High-level controller to manage the Block Model lifecycle in UI.
- */
 class ModelController : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
@@ -64,26 +61,21 @@ public:
                 stdMapping[it.key().toStdString()] = it.value().toString().toStdString();
             }
 
-            if (m_lastPath.endsWith(".dat", Qt::CaseInsensitive)) {
-                m_model = MicromineReader::load(m_lastPath.toStdString(), stdMapping);
-            } else {
-                ColumnMapping csvMap;
-                csvMap.x_col = stdMapping["X"];
-                csvMap.y_col = stdMapping["Y"];
-                csvMap.z_col = stdMapping["Z"];
-                csvMap.attribute_map.clear();
-                for(auto const& [k, v] : stdMapping) {
-                    if (k != "X" && k != "Y" && k != "Z") csvMap.attribute_map[k] = v;
-                }
-                m_model = Reader::load_from_csv(m_lastPath.toStdString(), csvMap);
-            }
-            
+            m_model = MicromineReader::load(m_lastPath.toStdString(), stdMapping);
+            qDebug() << "Checkpoint: Load finished. Size:" << m_model.size();
+
             MicromineReader::center_model(m_model);
+            qDebug() << "Checkpoint: Centering finished.";
+
             calculateBounds();
+            qDebug() << "Checkpoint: Bounds calculated.";
 
             m_index.build(m_model);
+            qDebug() << "Checkpoint: Spatial index built.";
+
             if (m_provider) {
                 m_provider->setModel(&m_model);
+                qDebug() << "Checkpoint: Provider model set.";
                 for (auto const& [name, vec] : m_model.attributes) {
                     m_provider->setColorAttribute(QString::fromStdString(name));
                     break; 
@@ -102,17 +94,25 @@ public:
         double minX = 1e30, maxX = -1e30;
         double minY = 1e30, maxY = -1e30;
         double minZ = 1e30, maxZ = -1e30;
+        bool foundAny = false;
 
         for (size_t i = 0; i < m_model.size(); ++i) {
-            minX = std::min(minX, m_model.x[i]); maxX = std::max(maxX, m_model.x[i]);
-            minY = std::min(minY, m_model.y[i]); maxY = std::max(maxY, m_model.y[i]);
-            minZ = std::min(minZ, m_model.z[i]); maxZ = std::max(maxZ, m_model.z[i]);
+            if (std::isfinite(m_model.x[i]) && std::isfinite(m_model.y[i]) && std::isfinite(m_model.z[i])) {
+                minX = std::min(minX, m_model.x[i]); maxX = std::max(maxX, m_model.x[i]);
+                minY = std::min(minY, m_model.y[i]); maxY = std::max(maxY, m_model.y[i]);
+                minZ = std::min(minZ, m_model.z[i]); maxZ = std::max(maxZ, m_model.z[i]);
+                foundAny = true;
+            }
         }
         
+        if (!foundAny) { m_modelRadius = 100; return; }
+
         double dx = maxX - minX;
         double dy = maxY - minY;
         double dz = maxZ - minZ;
-        m_modelRadius = std::sqrt(dx*dx + dy*dy + dz*dz);
+        m_modelRadius = std::sqrt(dx*dx + dy*dy + dz*dz) / 2.0;
+        if (!std::isfinite(m_modelRadius) || m_modelRadius < 1.0) m_modelRadius = 100;
+        
         emit boundsChanged();
     }
 

@@ -7,7 +7,6 @@
 #include <regex>
 #include <cmath>
 #include <cstring>
-#include <iomanip>
 
 namespace Mining {
 
@@ -23,7 +22,7 @@ static double extract_xml_val(const std::string& xml, const std::string& attr) {
 
 size_t MicromineReader::parse_header(std::ifstream& file, MetaData& meta, std::vector<Variable>& vars) {
     file.seekg(0, std::ios::beg);
-    std::vector<char> head_buf(PageSize * 32); 
+    std::vector<char> head_buf(PageSize * 16); 
     file.read(head_buf.data(), head_buf.size());
     std::string content(head_buf.data(), file.gcount());
 
@@ -31,8 +30,6 @@ size_t MicromineReader::parse_header(std::ifstream& file, MetaData& meta, std::v
     meta.origin_y = extract_xml_val(content, "origin-y");
     meta.origin_z = extract_xml_val(content, "origin-z");
     
-    std::cout << "READER DEBUG: XML Origin (" << meta.origin_x << ", " << meta.origin_y << ", " << meta.origin_z << ")" << std::endl;
-
     std::regex var_re("(\\d+)\\s+VARIABLES");
     std::smatch m;
     if (!std::regex_search(content, m, var_re)) throw std::runtime_error("VARIABLES not found");
@@ -41,7 +38,6 @@ size_t MicromineReader::parse_header(std::ifstream& file, MetaData& meta, std::v
     size_t pos = content.find('\n', m.position() + m.length()) + 1;
     std::stringstream ss(content.substr(pos));
     std::string line;
-    
     for (int v = 0; v < num_vars; ++v) {
         if (!std::getline(ss, line) || line.length() < 5) break;
         std::stringstream ls(line);
@@ -50,7 +46,7 @@ size_t MicromineReader::parse_header(std::ifstream& file, MetaData& meta, std::v
         var.type = t.empty() ? 'R' : static_cast<char>(std::toupper(t[0]));
         vars.push_back(var);
     }
-
+    // Return the offset of the page boundary immediately following the VARIABLES page
     return ((m.position() / PageSize) + 1) * PageSize;
 }
 
@@ -59,9 +55,6 @@ double MicromineReader::read_field_double(const char* src, const Variable& var) 
         case 'R': case 'D': { double v; std::memcpy(&v, src, 8); return v; }
         case 'S': case 'F': { float v; std::memcpy(&v, src, 4); return (double)v; }
         case 'I': { int32_t v; std::memcpy(&v, src, 4); return (double)v; }
-        case 'L': { int64_t v; std::memcpy(&v, src, 8); return (double)v; }
-        case 'T': { int16_t v; std::memcpy(&v, src, 2); return (double)v; }
-        case 'B': { uint8_t v; std::memcpy(&v, src, 1); return (double)(v != 0); }
         default: return 0.0;
     }
 }
@@ -81,51 +74,52 @@ BlockModelSoA MicromineReader::load(const std::string& file_path, const std::map
         return -1;
     };
 
-    int ix = get_idx("X", "EAST"), iy = get_idx("Y", "NORTH");
+    int ix = get_idx("X", "EAST"), iy = get_idx("Y", "NORTH"), iz = get_idx("Z", "RL");
+    int ixs = get_idx("XSPAN", "_EAST"), iys = get_idx("YSPAN", "_NORTH"), izs = get_idx("ZSPAN", "_RL");
+    int ig = get_idx("Grade", "AuCut");
 
-    // --- STRIDE HUNTER ---
-    // Search for the real per-record size by trying prefix sizes 0..4.
-    // Plausibility: both X and Y must be finite and look like real-world coordinates
-    // (absolute value > 100 and < 10,000,000 — covers UTM, local grids, etc.).
-    // We also verify consistency: read 10 consecutive records and require ALL to pass;
-    // then confirm that consecutive X-values differ by < 10,000 m (same mine block model).
-    size_t best_start  = header_end;
-    size_t best_stride = var_stride;
-    bool   found_sync  = false;
-
-    std::cout << "READER DEBUG: Hunting for Stride (Variable Stride is " << var_stride << ")" << std::endl;
-
-    auto is_plausible_coord = [](double v) -> bool {
+    // --- STRIDE + OFFSET HUNTER ---
+    // Try every combination of (per-record prefix bytes 0..4) × (start offset 0..511).
+    // For each candidate, attempt to read 10 consecutive records and require all 10 to
+    // have plausible X/Y coordinates AND consecutive X values within 10 km of each other.
+    // A plausible real-world coordinate: |v| > 100 AND |v| < 1e7 (covers UTM, local grids).
+    auto is_plausible = [](double v) {
         return std::isfinite(v) && std::abs(v) > 100.0 && std::abs(v) < 1.0e7;
     };
 
+    size_t best_start  = header_end;
+    size_t best_stride = var_stride; // fallback: no prefix
+    size_t best_prefix = 0;
+    bool   found_sync  = false;
+
+    std::cout << "READER DEBUG: hunting stride (var_stride=" << var_stride << ")..." << std::endl;
+
     for (int prefix = 0; prefix <= 4 && !found_sync; ++prefix) {
         size_t test_stride = var_stride + static_cast<size_t>(prefix);
-        for (size_t test_start = 0; test_start < 1024 && !found_sync; ++test_start) {
+        for (size_t s = 0; s < 512 && !found_sync; ++s) {
             file.clear();
-            file.seekg(header_end + test_start);
+            file.seekg(static_cast<std::streamoff>(header_end + s));
 
-            int good_blocks = 0;
-            double prev_x = 0.0;
+            int good = 0;
+            double prev_x = 0.0, prev_y = 0.0;
             std::vector<char> buf(test_stride);
             for (int b = 0; b < 10; ++b) {
-                if (!file.read(buf.data(), test_stride)) break;
-                // The actual field data begins after the per-record prefix bytes.
-                const char* rec = buf.data() + prefix;
+                if (!file.read(buf.data(), static_cast<std::streamsize>(test_stride))) break;
+                const char* rec = buf.data() + prefix; // skip per-record prefix
                 double xv = read_field_double(rec + offs[ix], vars[ix]);
                 double yv = read_field_double(rec + offs[iy], vars[iy]);
-                if (!is_plausible_coord(xv) || !is_plausible_coord(yv)) break;
-                // Consecutive centroids should be within 5000 m of each other
-                if (b > 0 && std::abs(xv - prev_x) > 5000.0) break;
-                prev_x = xv;
-                good_blocks++;
+                if (!is_plausible(xv) || !is_plausible(yv)) break;
+                if (b > 0 && (std::abs(xv - prev_x) > 10000.0 || std::abs(yv - prev_y) > 10000.0)) break;
+                prev_x = xv; prev_y = yv;
+                good++;
             }
 
-            if (good_blocks >= 8) {
-                best_start  = header_end + test_start;
+            if (good >= 8) {
+                best_start  = header_end + s;
                 best_stride = test_stride;
+                best_prefix = static_cast<size_t>(prefix);
                 found_sync  = true;
-                std::cout << "READER DEBUG: Sync SUCCESS!  start_offset=+" << test_start
+                std::cout << "READER DEBUG: Sync OK  start=+" << s
                           << "  prefix=" << prefix
                           << "  stride=" << test_stride << std::endl;
             }
@@ -133,24 +127,29 @@ BlockModelSoA MicromineReader::load(const std::string& file_path, const std::map
     }
 
     if (!found_sync)
-        std::cout << "READER DEBUG: Sync FAILED — using raw header_end and var_stride." << std::endl;
-
-    int iz = get_idx("Z", "RL");
-    int ixs = get_idx("XSPAN", "_EAST"), iys = get_idx("YSPAN", "_NORTH"), izs = get_idx("ZSPAN", "_RL");
-    int ig = get_idx("Grade", "AuCut");
+        std::cout << "READER DEBUG: Sync FAILED — using raw header_end, var_stride, no prefix." << std::endl;
 
     BlockModelSoA model;
     if (ig >= 0) model.add_attribute("Grade");
 
-    // The per-record prefix (status/padding bytes before the actual field data)
-    size_t rec_prefix = best_stride - var_stride;
+    // Print what columns we resolved so spans can be verified
+    auto name_of = [&](int idx) -> std::string {
+        return (idx >= 0 && idx < (int)vars.size()) ? vars[idx].name : "<none>";
+    };
+    std::cout << "READER DEBUG: X=" << name_of(ix) << " Y=" << name_of(iy) << " Z=" << name_of(iz)
+              << "  XS=" << name_of(ixs) << " YS=" << name_of(iys) << " ZS=" << name_of(izs)
+              << "  Grade=" << name_of(ig) << "  var_stride=" << var_stride << std::endl;
 
+    // --- FLAT SEQUENTIAL READ ---
+    // Records are a plain contiguous binary stream — no page alignment.
+    // best_start is the byte position of the first record; best_prefix bytes are
+    // skipped at the front of each best_stride-byte record.
     file.clear();
-    file.seekg(best_start);
-    std::vector<char> buf(best_stride);
-    while (file.read(buf.data(), best_stride)) {
-        // Skip the prefix bytes so field offsets index correctly into var data
-        const char* rec = buf.data() + rec_prefix;
+    file.seekg(static_cast<std::streamoff>(best_start));
+
+    std::vector<char> rec_buf(best_stride);
+    while (file.read(rec_buf.data(), static_cast<std::streamsize>(best_stride))) {
+        const char* rec = rec_buf.data() + best_prefix; // skip per-record prefix
 
         double xv  = (ix  >= 0) ? read_field_double(rec + offs[ix],  vars[ix])  : 0.0;
         double yv  = (iy  >= 0) ? read_field_double(rec + offs[iy],  vars[iy])  : 0.0;
@@ -160,27 +159,38 @@ BlockModelSoA MicromineReader::load(const std::string& file_path, const std::map
         double zsv = (izs >= 0) ? read_field_double(rec + offs[izs], vars[izs]) : 5.0;
         double gv  = (ig  >= 0) ? read_field_double(rec + offs[ig],  vars[ig])  : 0.0;
 
-        // A valid block: all coordinates finite and plausible; spans sane
-        if (!std::isfinite(xsv) || xsv <= 0.0 || xsv > 10000.0) xsv = 10.0;
-        if (!std::isfinite(ysv) || ysv <= 0.0 || ysv > 10000.0) ysv = 10.0;
-        if (!std::isfinite(zsv) || zsv <= 0.0 || zsv > 10000.0) zsv = 5.0;
-        if (!std::isfinite(gv))  gv = 0.0;
+        // Clamp spans: half-span > 500 m (XY) or > 200 m (Z) is a garbage read.
+        if (!std::isfinite(xsv) || xsv <= 0.0 || xsv > 500.0) xsv = 10.0;
+        if (!std::isfinite(ysv) || ysv <= 0.0 || ysv > 500.0) ysv = 10.0;
+        if (!std::isfinite(zsv) || zsv <= 0.0 || zsv > 200.0) zsv = 5.0;
 
-        if (std::isfinite(xv) && std::isfinite(yv) && std::isfinite(zv)
-            && std::abs(xv) < 1.0e7 && std::abs(yv) < 1.0e7 && std::abs(zv) < 1.0e6) {
-            model.x.push_back(xv - meta.origin_x);
-            model.y.push_back(yv - meta.origin_y);
-            model.z.push_back(zv - meta.origin_z);
-            model.x_span.push_back((float)xsv);
-            model.y_span.push_back((float)ysv);
-            model.z_span.push_back((float)zsv);
-            model.visible.push_back(1);
-            model.mined_state.push_back(0);
-            if (ig >= 0) model.attributes["Grade"].push_back((float)gv);
+        if (!std::isfinite(xv) || !std::isfinite(yv) || !std::isfinite(zv)) continue;
+        if (std::abs(xv - meta.origin_x) > 2000000.0) continue;
+
+        model.x.push_back(xv - meta.origin_x);
+        model.y.push_back(yv - meta.origin_y);
+        model.z.push_back(zv - meta.origin_z);
+        model.x_span.push_back(static_cast<float>(xsv));
+        model.y_span.push_back(static_cast<float>(ysv));
+        model.z_span.push_back(static_cast<float>(zsv));
+        model.visible.push_back(1);
+        if (ig >= 0) {
+            if (!std::isfinite(gv)) gv = 0.0;
+            model.attributes["Grade"].push_back(static_cast<float>(gv));
         }
     }
 
-    std::cout << "READER SUCCESS: Loaded " << model.size() << " blocks." << std::endl;
+    std::cout << "READER SUCCESS: Loaded " << model.size() << " blocks correctly aligned." << std::endl;
+    // Diagnostics — first 5 blocks + Grade range
+    for (size_t di = 0; di < std::min(model.size(), size_t(5)); ++di)
+        std::cout << "  Block[" << di << "]: xyz=(" << model.x[di] << "," << model.y[di] << "," << model.z[di]
+                  << ") span=(" << model.x_span[di] << "," << model.y_span[di] << "," << model.z_span[di] << ")" << std::endl;
+    if (ig >= 0 && !model.attributes.empty()) {
+        const auto& gv = model.attributes.at("Grade");
+        float gmin = *std::min_element(gv.begin(), gv.end());
+        float gmax = *std::max_element(gv.begin(), gv.end());
+        std::cout << "  Grade range: [" << gmin << " to " << gmax << "]" << std::endl;
+    }
     return model;
 }
 
