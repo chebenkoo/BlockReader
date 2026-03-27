@@ -13,19 +13,29 @@ This document outlines the detailed tasks for implementing a high-performance, v
   - Add validation logic for Null/NA values in CSV columns.
 - [ ] **1.3 Spatial Indexing (CGAL)**
   - Integrate `CGAL::AABB_tree` for fast intersection and distance queries.
-  - Wrap model centroids into `CGAL::Point_3` objects.
+  - Wrap model centroids into `CGAL::Point_3` objects using `Exact_predicates_inexact_constructions_kernel`.
   - Implement Bounding Box calculation for camera focus and view frustum culling.
+- [ ] **1.4 Coordinate Normalization (Precision Fix)**
+  - Implement "Local Origin" logic (Offset subtraction) to prevent 32-bit floating point jitter in 3D view.
+  - Store global coordinates in `double` (C++ backend) and relative offsets in `float` (GPU).
+- [ ] **1.5 Schema Auto-Detection & Mapping**
+  - Implement flexible CSV header mapping (e.g., Map `Au` or `Gold_gpt` to `Grade`).
+  - Add auto-detection logic for X, Y, Z centroids vs I, J, K indices.
 
 ## Phase 2: Qt Quick 3D Visualization
 - [ ] **2.1 Bridge C++ Model to QML**
   - Create `BlockModelProvider` (inheriting from `QQuick3DInstancing`).
   - Map model attributes (e.g., Grade) to instance data buffers.
+  - Maintain 1-to-1 mapping between `AABB_tree` primitives and SoA index for picking.
 - [ ] **2.2 GPU Instanced Rendering**
   - Setup `Model` in QML using a single cube mesh with `instancing` property.
   - Implement Vertex Shader for dynamic color mapping (LUT) based on Grade.
 - [ ] **2.3 Dynamic Filtering & Querying**
   - Implement "Active Layer" BitSet for fast visibility filtering (e.g., `Grade > 0.5`).
   - Enable interactive block picking (Ray casting using CGAL AABB Tree).
+- [ ] **2.4 Frustum Culling & LOD**
+  - Use CGAL Bounding Box and AABB tree to cull non-visible blocks before sending to GPU.
+  - Implement basic Level-of-Detail (LOD) for distant block clusters.
 
 ## Phase 3: Validation & Optimization
 - [ ] **3.1 Unit Testing**
