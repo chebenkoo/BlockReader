@@ -16,13 +16,14 @@ class BlockModelProvider : public QQuick3DInstancing {
     Q_PROPERTY(float maxRange READ maxRange WRITE setMaxRange NOTIFY rangeChanged)
     Q_PROPERTY(float minGrade READ minGrade WRITE setMinGrade NOTIFY minGradeChanged)
     Q_PROPERTY(float blockSize READ blockSize WRITE setBlockSize NOTIFY blockSizeChanged)
+    Q_PROPERTY(bool gridMode READ gridMode WRITE setGridMode NOTIFY gridModeChanged)
 
 public:
     explicit BlockModelProvider(QQuick3DObject *parent = nullptr);
     ~BlockModelProvider();
 
     void setModel(const BlockModelSoA* model);
-    void setModelRotation(float rx, float ry, float rz);
+    Q_INVOKABLE void setModelRotation(float rx, float ry, float rz);
 
     QByteArray getInstanceBuffer(int *instanceCount) override;
 
@@ -41,11 +42,15 @@ public:
     float blockSize() const { return m_blockSize; }
     void setBlockSize(float val);
 
+    bool gridMode() const { return m_gridMode; }
+    void setGridMode(bool val);
+
 signals:
     void colorAttributeChanged();
     void rangeChanged();
     void minGradeChanged();
     void blockSizeChanged();
+    void gridModeChanged();
 
 private:
     void autoComputeRange();
@@ -55,6 +60,7 @@ private:
     float m_maxRange = 1.0f;
     float m_minGrade = 0.0f;
     float m_blockSize = 1.0f;
+    bool m_gridMode = true;
     float m_rotX = 0, m_rotY = 0, m_rotZ = 0;
     
     QColor mapValueToColor(float value) const;

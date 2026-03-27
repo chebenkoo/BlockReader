@@ -23,46 +23,184 @@ Window {
     Dialog {
         id: mappingDialog
         title: "Map Block Model Fields"
-        width: 450
+        width: 500
+        height: Math.min(600, parent.height * 0.9)
         modal: true
         anchors.centerIn: parent
         visible: modelController.availableFields.length > 0 && !modelController.status.includes("Loaded")
+        standardButtons: Dialog.NoButton // We use our own "Load Model" button
 
-        ColumnLayout {
+        property var optionalFields: {
+            var f = ["(None)"];
+            if (modelController.availableFields) {
+                for (var i = 0; i < modelController.availableFields.length; i++) {
+                    f.push(modelController.availableFields[i]);
+                }
+            }
+            return f;
+        }
+
+        onVisibleChanged: {
+            if (visible && modelController.availableFields.length > 0) {
+                // Clear existing custom attributes to avoid duplicates
+                while(customAttributesList.children.length > 0) {
+                    customAttributesList.children[0].destroy();
+                }
+
+                // Auto-map everything that isn't a known spatial field
+                let fields = modelController.availableFields;
+                let spatial = ["EAST", "NORTH", "RL", "_EAST", "_NORTH", "_RL", "X", "Y", "Z", "XSPAN", "YSPAN", "ZSPAN"];
+                
+                for (let i = 0; i < fields.length; i++) {
+                    let field = fields[i];
+                    if (spatial.indexOf(field.toUpperCase()) === -1) {
+                        console.log("Auto-mapping field: " + field);
+                        attributeRowComponent.createObject(customAttributesList, {
+                            "internalName": field,
+                            "initialCsvField": field,
+                            "availableFields": modelController.availableFields
+                        });
+                    }
+                }
+            }
+        }
+
+        ScrollView {
             anchors.fill: parent
-            spacing: 10
+            clip: true
+            ScrollBar.vertical.policy: ScrollBar.AlwaysOn
 
-            Label { text: "Map Spatial Coordinates (Centroids):"; font.bold: true }
-            RowLayout {
-                Label { text: "X:"; Layout.preferredWidth: 50 }
-                ComboBox { id: comboX; model: modelController.availableFields; currentIndex: Math.max(0, model.indexOf("EAST")); Layout.fillWidth: true }
-            }
-            RowLayout {
-                Label { text: "Y:"; Layout.preferredWidth: 50 }
-                ComboBox { id: comboY; model: modelController.availableFields; currentIndex: Math.max(0, model.indexOf("NORTH")); Layout.fillWidth: true }
-            }
-            RowLayout {
-                Label { text: "Z:"; Layout.preferredWidth: 50 }
-                ComboBox { id: comboZ; model: modelController.availableFields; currentIndex: Math.max(0, model.indexOf("RL")); Layout.fillWidth: true }
-            }
+            ColumnLayout {
+                width: parent.width - 20
+                spacing: 15
+                anchors.margins: 10
 
-            Label { text: "Map Attributes:"; font.bold: true }
-            RowLayout {
-                Label { text: "Grade:"; Layout.preferredWidth: 50 }
-                ComboBox { id: comboGrade; model: modelController.availableFields; currentIndex: Math.max(0, model.indexOf("AuCut")); Layout.fillWidth: true }
-            }
+                Label { text: "Map Spatial Coordinates (Mandatory):"; font.bold: true; font.pixelSize: 14 }
+                
+                GridLayout {
+                    columns: 2
+                    Layout.fillWidth: true
+                    rowSpacing: 10
+                    
+                    Label { text: "X (East):" }
+                    ComboBox { id: comboX; model: modelController.availableFields; currentIndex: Math.max(0, model.indexOf("EAST")); Layout.fillWidth: true }
+                    
+                    Label { text: "Y (North):" }
+                    ComboBox { id: comboY; model: modelController.availableFields; currentIndex: Math.max(0, model.indexOf("NORTH")); Layout.fillWidth: true }
+                    
+                    Label { text: "Z (Elevation):" }
+                    ComboBox { id: comboZ; model: modelController.availableFields; currentIndex: Math.max(0, model.indexOf("RL")); Layout.fillWidth: true }
+                }
 
-            Button {
-                text: "Load Model"
-                Layout.alignment: Qt.AlignRight
-                onClicked: {
-                    modelController.loadWithMapping({
-                        "X": comboX.currentText,
-                        "Y": comboY.currentText,
-                        "Z": comboZ.currentText,
-                        "Grade": comboGrade.currentText
-                    })
-                    mappingDialog.close()
+                Rectangle { Layout.fillWidth: true; height: 1; color: "#444" }
+
+                Label { text: "Block Dimensions (Spans):"; font.bold: true; font.pixelSize: 14 }
+                
+                GridLayout {
+                    columns: 2
+                    Layout.fillWidth: true
+                    rowSpacing: 10
+
+                    Label { text: "X Span:" }
+                    ComboBox { id: comboXS; model: mappingDialog.optionalFields; currentIndex: Math.max(0, mappingDialog.optionalFields.indexOf("_EAST")); Layout.fillWidth: true }
+
+                    Label { text: "Y Span:" }
+                    ComboBox { id: comboYS; model: mappingDialog.optionalFields; currentIndex: Math.max(0, mappingDialog.optionalFields.indexOf("_NORTH")); Layout.fillWidth: true }
+
+                    Label { text: "Z Span:" }
+                    ComboBox { id: comboZS; model: mappingDialog.optionalFields; currentIndex: Math.max(0, mappingDialog.optionalFields.indexOf("_RL")); Layout.fillWidth: true }
+                }
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: "#444" }
+
+                Label { text: "Custom Attributes (Multi-Material):"; font.bold: true; font.pixelSize: 14 }
+                
+                ColumnLayout {
+                    id: customAttributesList
+                    Layout.fillWidth: true
+                    spacing: 8
+                }
+
+                Component {
+                    id: attributeRowComponent
+                    RowLayout {
+                        id: rowRoot
+                        property alias internalName: nameInput.text
+                        property string initialCsvField: ""
+                        property var availableFields: []
+                        readonly property string csvField: fieldCombo.currentText
+
+                        spacing: 5
+                        Layout.fillWidth: true
+
+                        TextField {
+                            id: nameInput
+                            placeholderText: "Internal Name"
+                            Layout.preferredWidth: 120
+                            background: Rectangle { color: "#333"; border.color: nameInput.activeFocus ? "#00ff00" : "#555" }
+                            color: "white"
+                        }
+
+                        ComboBox {
+                            id: fieldCombo
+                            model: ["(None)"].concat(Array.from(availableFields || []))
+                            Layout.fillWidth: true
+                            Component.onCompleted: {
+                                if (rowRoot.initialCsvField !== "") {
+                                    let idx = find(rowRoot.initialCsvField);
+                                    if (idx !== -1) currentIndex = idx;
+                                }
+                            }
+                        }
+
+                        Button {
+                            text: "×"
+                            onClicked: rowRoot.destroy()
+                            Layout.preferredWidth: 30
+                            palette.buttonText: "red"
+                        }
+                    }
+                }
+
+                Button {
+                    text: "+ Add More Field"
+                    Layout.fillWidth: true
+                    onClicked: {
+                        console.log("Adding new attribute row...");
+                        attributeRowComponent.createObject(customAttributesList, {
+                            "availableFields": modelController.availableFields
+                        });
+                    }
+                }
+
+                Item { Layout.preferredHeight: 20 }
+
+                Button {
+                    text: "Load Model"
+                    Layout.fillWidth: true
+                    highlighted: true
+                    padding: 10
+                    onClicked: {
+                        let mapping = {
+                            "X": comboX.currentText,
+                            "Y": comboY.currentText,
+                            "Z": comboZ.currentText
+                        };
+                        if (comboXS.currentText !== "(None)") mapping["XSPAN"] = comboXS.currentText;
+                        if (comboYS.currentText !== "(None)") mapping["YSPAN"] = comboYS.currentText;
+                        if (comboZS.currentText !== "(None)") mapping["ZSPAN"] = comboZS.currentText;
+
+                        for (var i = 0; i < customAttributesList.children.length; i++) {
+                            let row = customAttributesList.children[i];
+                            if (row && row.internalName && row.csvField !== "(None)") {
+                                console.log("Mapping custom attribute: " + row.internalName + " -> " + row.csvField);
+                                mapping[row.internalName] = row.csvField;
+                            }
+                        }
+
+                        modelController.loadWithMapping(mapping)
+                        mappingDialog.close()
+                    }
                 }
             }
         }
@@ -84,13 +222,14 @@ Window {
             Model {
                 id: voxelModel
                 source: "#Cube"
-                scale: Qt.vector3d(0.1, 0.1, 0.1)
-                materials: [ PrincipledMaterial { baseColor: "white"; lighting: PrincipledMaterial.NoLighting } ]
+                scale: Qt.vector3d(1, 1, 1)
+                materials: [ PrincipledMaterial { baseColor: "white"; lighting: PrincipledMaterial.FragmentLighting } ]
                 instancing: BlockModelProvider {
                     id: blockProvider
                     objectName: "blockProvider"
                     colorAttribute: "Grade"
                     blockSize: 1.0
+                    gridMode: true
                 }
             }
         }
@@ -118,30 +257,39 @@ Window {
                 Layout.fillWidth: true
                 enabled: modelController.status.includes("Loaded")
                 onClicked: {
-                    mainCamera.position = Qt.vector3d(0, 0, 2000)
+                    console.log("Auto-scaling camera. Radius: " + modelController.modelRadius);
+                    mainCamera.position = Qt.vector3d(0, 0, modelController.modelRadius * 2.5)
                     mainCamera.lookAt(blockModelNode)
                 }
             }
+
             Text { text: "Visualization"; color: "white"; font.bold: true }
+            
+            CheckBox {
+                text: "Render as Discrete Blocks"
+                checked: true
+                palette.windowText: "white"
+                onCheckedChanged: blockProvider.gridMode = checked
+            }
+
             Label { text: "Color By:"; color: "#aaa" }
             ComboBox {
+                id: sidebarCombo
                 Layout.fillWidth: true
                 model: modelController.availableFields
-                // Default to Grade or AuCut so the colour is meaningful on first load
-                currentIndex: {
-                    var g = model.indexOf("Grade");
-                    if (g >= 0) return g;
-                    var a = model.indexOf("AuCut");
-                    if (a >= 0) return a;
-                    return 0;
-                }
                 onCurrentTextChanged: blockProvider.colorAttribute = currentText
             }
             Label { text: "Block Size:"; color: "#aaa" }
             Slider { Layout.fillWidth: true; from: 0.1; to: 20.0; value: 0.8; onValueChanged: blockProvider.blockSize = value }
 
+            Label { text: "Rotation (Z-Axis):"; color: "#aaa" }
+            Slider { 
+                id: rotSlider; Layout.fillWidth: true; from: 0; to: 360; value: 0; 
+                onValueChanged: blockProvider.setModelRotation(0, 0, value) 
+            }
+
             Label { text: "Grade Cutoff:"; color: "#aaa" }
-            Slider { id: gradeSlider; Layout.fillWidth: true; from: 0.0; to: 5.0; value: 0.0; onValueChanged: blockProvider.minGrade = value }
+            Slider { id: gradeSlider; Layout.fillWidth: true; from: 0.0; to: 10.0; value: 0.0; onValueChanged: blockProvider.minGrade = value }
             Text { text: "Min: " + gradeSlider.value.toFixed(2); color: "white"; font.pixelSize: 10 }
 
             Item { Layout.fillHeight: true }

@@ -90,7 +90,8 @@ private:
                                   const std::vector<Variable>& vars,
                                   const std::string& x_col,
                                   const std::string& y_col,
-                                  const MetaData& meta);
+                                  const MetaData& meta,
+                                  size_t& out_sync_start);
 
     static double read_field_double(const char* src, const Variable& var);
 

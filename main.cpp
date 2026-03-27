@@ -8,6 +8,7 @@
 
 #include "BlockModel/Reader.h"
 #include "BlockModel/MicromineReader.h"
+#include "BlockModel/SubprocessReader.h"
 #include "BlockModel/SpatialIndex.h"
 #include "BlockModel/Instancing.h"
 
@@ -31,19 +32,22 @@ public:
         if (path.isEmpty()) path = fileUrl.toString();
         m_lastPath = path;
         try {
+            m_availableFields.clear();
             if (path.endsWith(".dat", Qt::CaseInsensitive)) {
-                MicromineReader::MetaData meta;
-                auto vars = MicromineReader::get_variables(path.toStdString(), meta);
-                m_availableFields.clear();
-                for (const auto& v : vars) m_availableFields << QString::fromStdString(v.name);
+                m_availableFields = SubprocessReader::getFields(path);
             } else {
                 std::ifstream f(path.toStdString());
-                std::string header;
-                std::getline(f, header);
-                m_availableFields = QString::fromStdString(header).split(QRegularExpression("[,\\s]+"), Qt::SkipEmptyParts);
+                std::string headerLine;
+                if (std::getline(f, headerLine)) {
+                    // Use a more robust split that handles quotes correctly
+                    QString qHeader = QString::fromStdString(headerLine);
+                    // Remove quotes from the entire header line before splitting
+                    qHeader.replace("\"", "");
+                    m_availableFields = qHeader.split(QRegularExpression("[,\\s]+"), Qt::SkipEmptyParts);
+                }
             }
             emit availableFieldsChanged();
-            m_status = "File scanned. Please map fields.";
+            m_status = "File scanned. " + QString::number(m_availableFields.size()) + " fields found.";
             emit statusChanged();
         } catch (const std::exception &e) {
             m_status = QString("Scan Error: %1").arg(e.what());
@@ -61,24 +65,50 @@ public:
                 stdMapping[it.key().toStdString()] = it.value().toString().toStdString();
             }
 
-            m_model = MicromineReader::load(m_lastPath.toStdString(), stdMapping);
-            qDebug() << "Checkpoint: Load finished. Size:" << m_model.size();
+            if (m_lastPath.endsWith(".dat", Qt::CaseInsensitive)) {
+                m_model = SubprocessReader::load(m_lastPath, stdMapping);
+            } else {
+                ColumnMapping csvMap;
+                csvMap.x_col = stdMapping["X"];
+                csvMap.y_col = stdMapping["Y"];
+                csvMap.z_col = stdMapping["Z"];
+                csvMap.x_span_col = stdMapping.count("XSPAN") ? stdMapping["XSPAN"] : "";
+                csvMap.y_span_col = stdMapping.count("YSPAN") ? stdMapping["YSPAN"] : "";
+                csvMap.z_span_col = stdMapping.count("ZSPAN") ? stdMapping["ZSPAN"] : "";
+                
+                csvMap.attribute_map.clear();
+                for(auto const& [k, v] : stdMapping) {
+                    // Skip spatial keys, everything else is an attribute
+                    if (k != "X" && k != "Y" && k != "Z" && k != "XSPAN" && k != "YSPAN" && k != "ZSPAN") {
+                        csvMap.attribute_map[k] = v;
+                    }
+                }
+                m_model = Reader::load_from_csv(m_lastPath.toStdString(), csvMap);
+            }
+            
+            qDebug() << "Load finished. Size:" << m_model.size();
 
             MicromineReader::center_model(m_model);
-            qDebug() << "Checkpoint: Centering finished.";
+            
+            // Calculate and log the centroid for verification
+            double sx=0, sy=0, sz=0; size_t count=0;
+            for(size_t i=0; i<m_model.size(); ++i) { sx+=m_model.x[i]; sy+=m_model.y[i]; sz+=m_model.z[i]; count++; }
+            qDebug() << "CENTROID (relative to model space):" << (count > 0 ? sx/count : 0) << "," << (count > 0 ? sy/count : 0);
 
             calculateBounds();
-            qDebug() << "Checkpoint: Bounds calculated.";
 
             m_index.build(m_model);
-            qDebug() << "Checkpoint: Spatial index built.";
-
             if (m_provider) {
                 m_provider->setModel(&m_model);
-                qDebug() << "Checkpoint: Provider model set.";
-                for (auto const& [name, vec] : m_model.attributes) {
-                    m_provider->setColorAttribute(QString::fromStdString(name));
-                    break; 
+                
+                m_availableFields.clear();
+                for (auto const& [name, _] : m_model.attributes) {
+                    m_availableFields << QString::fromStdString(name);
+                }
+                emit availableFieldsChanged();
+
+                if (!m_availableFields.isEmpty()) {
+                    m_provider->setColorAttribute(m_availableFields.first());
                 }
             }
             m_status = QString("Loaded %1 blocks").arg(m_model.size());
@@ -113,6 +143,9 @@ public:
         m_modelRadius = std::sqrt(dx*dx + dy*dy + dz*dz) / 2.0;
         if (!std::isfinite(m_modelRadius) || m_modelRadius < 1.0) m_modelRadius = 100;
         
+        qDebug() << "Model Bounds: min(" << minX << minY << minZ << ") max(" << maxX << maxY << maxZ << ")";
+        qDebug() << "Calculated Model Radius:" << m_modelRadius;
+
         emit boundsChanged();
     }
 

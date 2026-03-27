@@ -106,6 +106,29 @@ struct Mat4
 };
 
 // ---------------------------------------------------------------------------
+// Voxel – Array-of-Structures (AoS) representation
+// ---------------------------------------------------------------------------
+struct Voxel {
+    float x, y, z;          // Centroid
+    float xs, ys, zs;       // Dimensions
+    int32_t i, j, k;        // Grid indices
+    uint8_t mined_state;
+    uint8_t visible;
+    uint64_t morton_key;
+    // Note: dynamic attributes in AoS are often stored separately 
+    // to maintain a fixed-size struct for memory efficiency.
+};
+
+struct BlockModelAoS {
+    std::vector<Voxel> voxels;
+    std::unordered_map<std::string, std::vector<float>> attributes;
+
+    size_t size() const { return voxels.size(); }
+    bool   empty() const { return voxels.empty(); }
+    void   clear() { voxels.clear(); attributes.clear(); }
+};
+
+// ---------------------------------------------------------------------------
 // BlockModelSoA – Structure-of-Arrays block model storage
 // ---------------------------------------------------------------------------
 struct BlockModelSoA
@@ -134,6 +157,14 @@ struct BlockModelSoA
         i.clear(); j.clear(); k.clear();
         mined_state.clear(); visible.clear(); morton_key.clear();
         attributes.clear();
+    }
+
+    void reserve(size_t n) {
+        x.reserve(n); y.reserve(n); z.reserve(n);
+        x_span.reserve(n); y_span.reserve(n); z_span.reserve(n);
+        i.reserve(n); j.reserve(n); k.reserve(n);
+        mined_state.reserve(n); visible.reserve(n); morton_key.reserve(n);
+        for (auto& [_, vec] : attributes) vec.reserve(n);
     }
 };
 

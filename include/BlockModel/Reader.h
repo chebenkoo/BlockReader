@@ -17,7 +17,12 @@ struct ColumnMapping {
     std::string y_col = "y";
     std::string z_col = "z";
 
-    // 2. Optional Grid Indices
+    // 2. Optional Grid Spans/Sizes
+    std::string x_span_col = "x_span";
+    std::string y_span_col = "y_span";
+    std::string z_span_col = "z_span";
+
+    // 3. Optional Grid Indices
     std::string i_col = "i";
     std::string j_col = "j";
     std::string k_col = "k";
@@ -57,6 +62,15 @@ public:
      * @return Loaded BlockModelSoA.
      */
     static BlockModelSoA load_from_csv(
+        const std::string& file_path, 
+        const ColumnMapping& mapping,
+        ProgressCallback callback = nullptr
+    );
+
+    /**
+     * @brief Loads a block model into an AoS structure.
+     */
+    static BlockModelAoS load_to_aos(
         const std::string& file_path, 
         const ColumnMapping& mapping,
         ProgressCallback callback = nullptr

@@ -82,3 +82,5 @@ CMakeLists.txt.user*
 /build*/
 
 CGAL-6.1.1/
+/MicromineProxy/obj/
+third_party/

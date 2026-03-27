@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>x64</Platforms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="MicromineWrapper">
+      <HintPath>..\bin\MicromineSDK\MicromineWrapper.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Copy all SDK DLLs to the output folder for runtime execution -->
+  <ItemGroup>
+    <None Include="..\bin\MicromineSDK\*.dll">
+      <Link>%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+</Project>
