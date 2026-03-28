@@ -79,13 +79,79 @@ BlockModelSoA Reader::load_from_csv(
     int idx_xs = get_col(mapping.x_span_col), idx_ys = get_col(mapping.y_span_col), idx_zs = get_col(mapping.z_span_col);
     int idx_i = get_col(mapping.i_col), idx_j = get_col(mapping.j_col), idx_k = get_col(mapping.k_col);
 
+    if (idx_xs < 0 || idx_ys < 0 || idx_zs < 0)
+        std::cout << "[Reader] WARNING: Span columns not mapped "
+                  << "(xs=" << idx_xs << " ys=" << idx_ys << " zs=" << idx_zs
+                  << "). All blocks will use default spans 10/10/5.\n"
+                  << "         To fix: map X Span / Y Span / Z Span in the field dialog.\n";
+
+    auto clean_token = [](std::string& s) {
+        if (s.size() >= 3 && (unsigned char)s[0] == 0xEF && (unsigned char)s[1] == 0xBB && (unsigned char)s[2] == 0xBF)
+            s.erase(0, 3);
+        const char* trim_chars = " \t\r\n\"";
+        size_t first = s.find_first_not_of(trim_chars);
+        if (first == std::string::npos) { s.clear(); return; }
+        size_t last = s.find_last_not_of(trim_chars);
+        s = s.substr(first, (last - first + 1));
+    };
+
+    // --- Type probe: read first 10 data rows to classify each attribute column ---
+    // For each column: if majority of sampled values fail float parsing → STRING.
+    enum class ColType { NUMERIC, STRING };
+    std::map<std::string, ColType> col_types;
+    {
+        auto probe_pos = file.tellg();
+        std::map<std::string, int> pass_count, fail_count;
+
+        std::string probe_line;
+        int probed = 0;
+        while (probed < 10 && std::getline(file, probe_line)) {
+            if (probe_line.empty()) continue;
+            std::vector<std::string> probe_row;
+            size_t ps = 0, pe = probe_line.find(delimiter);
+            while (pe != std::string::npos) {
+                std::string t = probe_line.substr(ps, pe - ps); clean_token(t);
+                probe_row.push_back(t); ps = pe + 1; pe = probe_line.find(delimiter, ps);
+            }
+            std::string lt = probe_line.substr(ps); clean_token(lt);
+            probe_row.push_back(lt);
+
+            for (auto const& [name, csv_header] : mapping.attribute_map) {
+                int col_idx = get_col(csv_header);
+                if (col_idx < 0 || col_idx >= (int)probe_row.size()) continue;
+                const std::string& val = probe_row[col_idx];
+                if (val.empty()) continue;
+                float tmp;
+                auto res = fast_float::from_chars(val.data(), val.data() + val.size(), tmp);
+                if (res.ec == std::errc()) pass_count[name]++;
+                else                       fail_count[name]++;
+            }
+            probed++;
+        }
+        // Reset to just after header for the main parse loop
+        file.seekg(probe_pos);
+
+        for (auto const& [internal_name, csv_header] : mapping.attribute_map) {
+            int p = pass_count.count(internal_name) ? pass_count[internal_name] : 0;
+            int f = fail_count.count(internal_name) ? fail_count[internal_name] : 0;
+            col_types[internal_name] = (f > p) ? ColType::STRING : ColType::NUMERIC;
+            std::cout << "[Reader] Column '" << internal_name << "' ("
+                      << csv_header << "): "
+                      << (col_types[internal_name] == ColType::STRING ? "STRING" : "NUMERIC")
+                      << " (pass=" << p << " fail=" << f << ")\n";
+        }
+    }
+
     BlockModelSoA model;
     std::map<std::string, int> attr_indices;
     for (auto const& [internal_name, csv_header] : mapping.attribute_map) {
         int idx = get_col(csv_header);
         if (idx >= 0) {
             attr_indices[internal_name] = idx;
-            model.add_attribute(internal_name);
+            if (col_types[internal_name] == ColType::STRING)
+                model.add_string_attribute(internal_name);
+            else
+                model.add_attribute(internal_name);
         }
     }
 
@@ -97,19 +163,6 @@ BlockModelSoA Reader::load_from_csv(
     size_t count = 0;
     double cell_x = 10.0, cell_y = 10.0, cell_z = 5.0;
     bool cell_size_initialized = false;
-
-    auto clean_token = [](std::string& s) {
-        // 1. Remove UTF-8 BOM if present (often at start of CSVs)
-        if (s.size() >= 3 && (unsigned char)s[0] == 0xEF && (unsigned char)s[1] == 0xBB && (unsigned char)s[2] == 0xBF) {
-            s.erase(0, 3);
-        }
-        // 2. Trim whitespace and quotes from both ends
-        const char* trim_chars = " \t\r\n\"";
-        size_t first = s.find_first_not_of(trim_chars);
-        if (first == std::string::npos) { s.clear(); return; }
-        size_t last = s.find_last_not_of(trim_chars);
-        s = s.substr(first, (last - first + 1));
-    };
 
     std::vector<std::string> row;
 
@@ -148,9 +201,9 @@ BlockModelSoA Reader::load_from_csv(
         int32_t j = (idx_j >= 0 && idx_j < (int)row.size()) ? parse_int(row[idx_j]) : static_cast<int32_t>(std::round(y / cell_y));
         int32_t k = (idx_k >= 0 && idx_k < (int)row.size()) ? parse_int(row[idx_k]) : static_cast<int32_t>(std::round(z / cell_z));
 
-        model.x.push_back(x - mapping.offset_x);
-        model.y.push_back(y - mapping.offset_y);
-        model.z.push_back(z - mapping.offset_z);
+        model.x.push_back((float)(x - mapping.offset_x));
+        model.y.push_back((float)(y - mapping.offset_y));
+        model.z.push_back((float)(z - mapping.offset_z));
         model.x_span.push_back(xs);
         model.y_span.push_back(ys);
         model.z_span.push_back(zs);
@@ -162,12 +215,43 @@ BlockModelSoA Reader::load_from_csv(
         model.morton_key.push_back(SpatialLocality::encode_morton_3d(std::abs(i), std::abs(j), std::abs(k)));
 
         for (auto const& [name, col_idx] : attr_indices) {
-            model.attributes[name].push_back((col_idx < (int)row.size()) ? parse_float(row[col_idx]) : 0.0f);
+            const std::string& raw = (col_idx < (int)row.size()) ? row[col_idx] : "";
+            if (col_types.at(name) == ColType::STRING) {
+                model.string_attributes[name].push_back(raw);
+            } else {
+                model.attributes[name].push_back(raw.empty() ? 0.0f : parse_float(raw));
+            }
         }
 
         count++;
         if (callback && count % 100000 == 0) callback({count, 0, "Loading SoA Blocks..."});
     }
+
+    // --- Load summary ---
+    std::cout << "[Reader] Loaded " << count << " blocks from: " << file_path << "\n";
+    std::cout << "[Reader] Column mapping: X='" << mapping.x_col << "'(" << idx_x
+              << ") Y='" << mapping.y_col << "'(" << idx_y
+              << ") Z='" << mapping.z_col << "'(" << idx_z << ")\n";
+    std::cout << "[Reader] Span columns: XS='" << mapping.x_span_col << "'(" << idx_xs
+              << ") YS='" << mapping.y_span_col << "'(" << idx_ys
+              << ") ZS='" << mapping.z_span_col << "'(" << idx_zs << ")\n";
+    if (!model.x.empty()) {
+        float xMin=*std::min_element(model.x.begin(),model.x.end());
+        float xMax=*std::max_element(model.x.begin(),model.x.end());
+        float yMin=*std::min_element(model.y.begin(),model.y.end());
+        float yMax=*std::max_element(model.y.begin(),model.y.end());
+        float zMin=*std::min_element(model.z.begin(),model.z.end());
+        float zMax=*std::max_element(model.z.begin(),model.z.end());
+        std::cout << "[Reader] X range: [" << xMin << ", " << xMax << "]\n";
+        std::cout << "[Reader] Y range: [" << yMin << ", " << yMax << "]\n";
+        std::cout << "[Reader] Z range: [" << zMin << ", " << zMax << "]\n";
+        if (!model.x_span.empty())
+            std::cout << "[Reader] First block spans: xs=" << model.x_span[0]
+                      << " ys=" << model.y_span[0] << " zs=" << model.z_span[0] << "\n";
+    }
+    std::cout << "[Reader] Attributes:";
+    for (auto const& [k, v] : model.attributes) std::cout << " '" << k << "'(" << v.size() << ")";
+    std::cout << "\n" << std::flush;
 
     return model;
 }

@@ -28,12 +28,9 @@ struct ColumnMapping {
     std::string k_col = "k";
 
     // 3. Flexible Attribute Mapping
-    // Key: Internal Name (e.g., "Grade"), Value: CSV Header (e.g., "Au_gpt")
-    std::map<std::string, std::string> attribute_map = {
-        {"Grade", "au"},
-        {"Density", "density"},
-        {"RockType", "rocktype"}
-    };
+    // Key: Internal Name (used in UI), Value: CSV header (matched case-insensitively)
+    // Populated at runtime from the field mapping dialog — no hardcoded defaults.
+    std::map<std::string, std::string> attribute_map;
 
     // 4. Normalization
     double offset_x = 0.0;

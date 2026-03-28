@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QDebug>
 #include <fstream>
+#include <chrono>
 #include <QRegularExpression>
 
 #include "BlockModel/Reader.h"
@@ -89,11 +90,20 @@ public:
             qDebug() << "Load finished. Size:" << m_model.size();
 
             MicromineReader::center_model(m_model);
-            
+
             // Calculate and log the centroid for verification
             double sx=0, sy=0, sz=0; size_t count=0;
             for(size_t i=0; i<m_model.size(); ++i) { sx+=m_model.x[i]; sy+=m_model.y[i]; sz+=m_model.z[i]; count++; }
             qDebug() << "CENTROID (relative to model space):" << (count > 0 ? sx/count : 0) << "," << (count > 0 ? sy/count : 0);
+
+            // Sort by Morton key for cache-friendly memory layout
+            {
+                auto t0 = std::chrono::high_resolution_clock::now();
+                m_model.sort_by_morton();
+                auto t1 = std::chrono::high_resolution_clock::now();
+                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+                qDebug() << "Morton sort: " << m_model.size() << "blocks sorted in" << ms << "ms";
+            }
 
             calculateBounds();
 
@@ -121,9 +131,9 @@ public:
 
     void calculateBounds() {
         if (m_model.empty()) return;
-        double minX = 1e30, maxX = -1e30;
-        double minY = 1e30, maxY = -1e30;
-        double minZ = 1e30, maxZ = -1e30;
+        float minX = 1e30f, maxX = -1e30f;
+        float minY = 1e30f, maxY = -1e30f;
+        float minZ = 1e30f, maxZ = -1e30f;
         bool foundAny = false;
 
         for (size_t i = 0; i < m_model.size(); ++i) {

@@ -133,19 +133,25 @@ struct BlockModelAoS {
 // ---------------------------------------------------------------------------
 struct BlockModelSoA
 {
-    std::vector<double> x, y, z;
-    std::vector<float>  x_span, y_span, z_span;
+    std::vector<float> x, y, z;           // centered coords — float is sufficient post-centering
+    std::vector<float> x_span, y_span, z_span;
     std::vector<int>    i, j, k;
     std::vector<uint8_t> mined_state;
     std::vector<uint8_t> visible;
     std::vector<uint64_t> morton_key;
-    std::unordered_map<std::string, std::vector<float>> attributes;
+    std::unordered_map<std::string, std::vector<float>>       attributes;        // numeric
+    std::unordered_map<std::string, std::vector<std::string>> string_attributes; // categorical
 
     void add_attribute(const std::string& name)
     {
-        if (attributes.find(name) == attributes.end()) {
+        if (attributes.find(name) == attributes.end())
             attributes.emplace(name, std::vector<float>{});
-        }
+    }
+
+    void add_string_attribute(const std::string& name)
+    {
+        if (string_attributes.find(name) == string_attributes.end())
+            string_attributes.emplace(name, std::vector<std::string>{});
     }
 
     size_t size() const { return x.size(); }
@@ -157,6 +163,7 @@ struct BlockModelSoA
         i.clear(); j.clear(); k.clear();
         mined_state.clear(); visible.clear(); morton_key.clear();
         attributes.clear();
+        string_attributes.clear();
     }
 
     void reserve(size_t n) {
@@ -165,6 +172,37 @@ struct BlockModelSoA
         i.reserve(n); j.reserve(n); k.reserve(n);
         mined_state.reserve(n); visible.reserve(n); morton_key.reserve(n);
         for (auto& [_, vec] : attributes) vec.reserve(n);
+        for (auto& [_, vec] : string_attributes) vec.reserve(n);
+    }
+
+    // Sort all parallel arrays by Morton key for cache-friendly memory layout.
+    // Spatially adjacent blocks end up adjacent in memory, improving GPU/CPU
+    // cache hit rate when building the instance buffer.
+    void sort_by_morton() {
+        const size_t n = x.size();
+        if (n == 0) return;
+
+        // Build index permutation sorted by Morton key
+        std::vector<size_t> order(n);
+        std::iota(order.begin(), order.end(), 0);
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+            return morton_key[a] < morton_key[b];
+        });
+
+        // Apply the same permutation to every parallel array
+        auto apply = [&](auto& vec) {
+            using T = typename std::decay_t<decltype(vec)>::value_type;
+            std::vector<T> tmp(n);
+            for (size_t idx = 0; idx < n; ++idx) tmp[idx] = std::move(vec[order[idx]]);
+            vec = std::move(tmp);
+        };
+
+        apply(x); apply(y); apply(z);
+        apply(x_span); apply(y_span); apply(z_span);
+        apply(i); apply(j); apply(k);
+        apply(mined_state); apply(visible); apply(morton_key);
+        for (auto& [_, vec] : attributes) apply(vec);
+        for (auto& [_, vec] : string_attributes) apply(vec);
     }
 };
 

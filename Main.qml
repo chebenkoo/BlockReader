@@ -206,6 +206,65 @@ Window {
         }
     }
 
+    // Block properties panel
+    Rectangle {
+        id: blockInfoPanel
+        visible: false
+        width: 220
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        color: Qt.rgba(0.08, 0.08, 0.08, 0.92)
+        border.color: "#00ff88"
+        border.width: 1
+        z: 10
+
+        property var blockData: ({})
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 12
+            spacing: 6
+
+            RowLayout {
+                Layout.fillWidth: true
+                Text { text: "Block Properties"; color: "#00ff88"; font.bold: true; font.pixelSize: 13; Layout.fillWidth: true }
+                Text {
+                    text: "✕"; color: "#aaa"; font.pixelSize: 16
+                    MouseArea { anchors.fill: parent; onClicked: blockInfoPanel.visible = false }
+                }
+            }
+            Rectangle { Layout.fillWidth: true; height: 1; color: "#333" }
+
+            Repeater {
+                model: {
+                    var keys = Object.keys(blockInfoPanel.blockData).filter(k => k !== "_index");
+                    keys.sort();
+                    return keys;
+                }
+                delegate: RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: modelData + ":";
+                        color: "#aaa"; font.pixelSize: 11
+                        Layout.preferredWidth: 70
+                        elide: Text.ElideRight
+                    }
+                    Text {
+                        text: {
+                            var v = blockInfoPanel.blockData[modelData];
+                            return (typeof v === "number") ? v.toFixed(4) : String(v);
+                        }
+                        color: "white"; font.pixelSize: 11; font.family: "Monospace"
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                    }
+                }
+            }
+            Item { Layout.fillHeight: true }
+        }
+    }
+
     View3D {
         id: view3d
         anchors.fill: parent
@@ -219,10 +278,12 @@ Window {
 
         Node {
             id: blockModelNode
+
             Model {
                 id: voxelModel
                 source: "#Cube"
                 scale: Qt.vector3d(1, 1, 1)
+                pickable: true
                 materials: [ PrincipledMaterial { baseColor: "white"; lighting: PrincipledMaterial.FragmentLighting } ]
                 instancing: BlockModelProvider {
                     id: blockProvider
@@ -232,14 +293,73 @@ Window {
                     gridMode: true
                 }
             }
+
+            // Selection highlight — one extra cube, zero instancing cost
+            Model {
+                id: selectionHighlight
+                visible: blockInfoPanel.visible
+
+                // Same Z-up → Y-up remap as getInstanceBuffer
+                position: Qt.vector3d(
+                    blockInfoPanel.blockData.X  || 0,
+                    blockInfoPanel.blockData.Z  || 0,
+                    -(blockInfoPanel.blockData.Y || 0)
+                )
+
+                // Match block dimensions, scaled 5% larger so it wraps around the block
+                scale: Qt.vector3d(
+                    (blockInfoPanel.blockData.X_span || 10) / 100 * blockProvider.blockSize * 1.05,
+                    (blockInfoPanel.blockData.Z_span || 5)  / 100 * blockProvider.blockSize * 1.05,
+                    (blockInfoPanel.blockData.Y_span || 10) / 100 * blockProvider.blockSize * 1.05
+                )
+
+                source: "#Cube"
+                materials: [
+                    PrincipledMaterial {
+                        baseColor: Qt.rgba(1, 0.9, 0, 1)
+                        emissiveFactor: Qt.vector3d(1, 0.8, 0)
+                        lighting: PrincipledMaterial.NoLighting
+                        cullMode: PrincipledMaterial.NoCulling
+                        depthDrawMode: PrincipledMaterial.AlwaysDepthDraw
+                        opacity: 0.6
+                    }
+                ]
+            }
         }
 
         DirectionalLight { eulerRotation.x: -30; eulerRotation.y: -70 }
         PerspectiveCamera { id: mainCamera; position: Qt.vector3d(0, 0, 1000); lookAtNode: blockModelNode; clipFar: 100000; clipNear: 1 }
         
-        OrbitCameraController { 
+        OrbitCameraController {
             origin: blockModelNode
             camera: mainCamera
+        }
+    }
+
+    // TapHandler uses Qt 6 pointer-event system — does not conflict with
+    // OrbitCameraController's internal MouseArea (old event system).
+    // gesturePolicy: DragThreshold cancels the tap if the mouse moves,
+    // so orbit drags never accidentally trigger a pick.
+    TapHandler {
+        gesturePolicy: TapHandler.DragThreshold
+
+        onTapped: (eventPoint) => {
+            // eventPoint.position is already in the root item's coordinate space,
+            // which matches view3d (anchors.fill: parent). No remapping needed.
+            var pos = eventPoint.position;
+            console.log("[Pick] Tapped at:", pos.x.toFixed(1), pos.y.toFixed(1));
+
+            var result = view3d.pick(pos.x, pos.y);
+            console.log("[Pick] objectHit=", result.objectHit, "| instanceIndex=", result.instanceIndex);
+
+            if (result.objectHit && result.instanceIndex >= 0) {
+                var info = blockProvider.getBlockInfo(result.instanceIndex);
+                console.log("[Pick] Hit! keys:", Object.keys(info).join(", "));
+                blockInfoPanel.blockData = info;
+                blockInfoPanel.visible = true;
+            } else {
+                console.log("[Pick] No block hit.");
+            }
         }
     }
 
@@ -279,9 +399,6 @@ Window {
                 model: modelController.availableFields
                 onCurrentTextChanged: blockProvider.colorAttribute = currentText
             }
-            Label { text: "Block Size:"; color: "#aaa" }
-            Slider { Layout.fillWidth: true; from: 0.1; to: 20.0; value: 0.8; onValueChanged: blockProvider.blockSize = value }
-
             Label { text: "Rotation (Z-Axis):"; color: "#aaa" }
             Slider { 
                 id: rotSlider; Layout.fillWidth: true; from: 0; to: 360; value: 0; 

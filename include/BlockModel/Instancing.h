@@ -3,8 +3,10 @@
 #include <QtQuick3D/qquick3dinstancing.h>
 #include <QtQuick3D/qquick3dobject.h>
 #include <QtCore/qstring.h>
+#include <QtCore/qvariant.h>
 #include <QtGui/qvector3d.h>
 #include <QtGui/qcolor.h>
+#include <vector>
 #include "BlockModel.h"
 
 namespace Mining {
@@ -24,6 +26,7 @@ public:
 
     void setModel(const BlockModelSoA* model);
     Q_INVOKABLE void setModelRotation(float rx, float ry, float rz);
+    Q_INVOKABLE QVariantMap getBlockInfo(int instanceIndex) const;
 
     QByteArray getInstanceBuffer(int *instanceCount) override;
 
@@ -55,6 +58,7 @@ signals:
 private:
     void autoComputeRange();
     const BlockModelSoA* m_model = nullptr;
+    std::vector<int> m_instanceToModelIndex;
     QString m_colorAttribute = "Grade";
     float m_minRange = 0.0f;
     float m_maxRange = 1.0f;

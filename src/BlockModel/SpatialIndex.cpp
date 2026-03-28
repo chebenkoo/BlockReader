@@ -50,12 +50,12 @@ void SpatialIndex::build(const BlockModelSoA& model) {
     pimpl->clear();
     if (model.size() == 0) return;
 
-    double x_min = model.x[0], x_max = model.x[0];
-    double y_min = model.y[0], y_max = model.y[0];
-    double z_min = model.z[0], z_max = model.z[0];
+    float x_min = model.x[0], x_max = model.x[0];
+    float y_min = model.y[0], y_max = model.y[0];
+    float z_min = model.z[0], z_max = model.z[0];
 
     for (size_t i = 0; i < model.size(); ++i) {
-        Point p(model.x[i], model.y[i], model.z[i]);
+        Point p(model.x[i], model.y[i], model.z[i]); // float→double implicit, CGAL uses double kernel
         pimpl->tree.insert(VoxelPrimitive(i, p));
 
         x_min = std::min(x_min, model.x[i]); x_max = std::max(x_max, model.x[i]);
@@ -63,7 +63,7 @@ void SpatialIndex::build(const BlockModelSoA& model) {
         z_min = std::min(z_min, model.z[i]); z_max = std::max(z_max, model.z[i]);
     }
 
-    pimpl->bbox = {x_min, y_min, z_min, x_max, y_max, z_max};
+    pimpl->bbox = {x_min, y_min, z_min, x_max, y_max, z_max}; // float→double for BBox members
     pimpl->tree.build();
 }
 

@@ -47,3 +47,6 @@ $env:PATH = "C:\Qt\6.10.2\mingw_64\bin;C:\Qt\Tools\mingw1310_64\bin;" + $env:PAT
 - **Cache Locality:** Implements Morton Order (Z-curve) for $O(1)$ spatial data sorting.
 - **Precision:** Coordinate normalization (Local Origin) to prevent 32-bit GPU jitter.
 - **Scalability:** Designed for 10M+ voxels using Qt Quick 3D Instanced Rendering.
+
+
+  cmake .. -DCMAKE_PREFIX_PATH="C:/Qt/6.11.0/mingw_64" -G "MinGW Makefiles"

@@ -322,7 +322,7 @@ BlockModelSoA MicromineReader::load(const std::string& file_path,
                 if (!std::isfinite(ys) || ys <= 0.0 || ys > 500.0) ys = 10.0;
                 if (!std::isfinite(zs) || zs <= 0.0 || zs > 200.0) zs = 5.0;
 
-                model.x.push_back(xv); model.y.push_back(yv); model.z.push_back(zv);
+                model.x.push_back((float)xv); model.y.push_back((float)yv); model.z.push_back((float)zv);
                 model.x_span.push_back((float)xs); model.y_span.push_back((float)ys); model.z_span.push_back((float)zs);
                 model.mined_state.push_back(0); model.visible.push_back(1);
                 model.i.push_back(0); model.j.push_back(0); model.k.push_back(0); model.morton_key.push_back(0);
