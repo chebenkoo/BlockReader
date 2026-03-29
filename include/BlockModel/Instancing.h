@@ -31,7 +31,7 @@ public:
 
     QByteArray getInstanceBuffer(int *instanceCount) override;
 
-    QString colorAttribute() const { return m_colorAttribute; }
+    QString colorAttribute() const;
     void setColorAttribute(const QString &attr);
 
     float minRange() const { return m_minRange; }
@@ -60,10 +60,9 @@ signals:
     void gridModeChanged();
 
 private:
-    void autoComputeRange();
     const BlockModelSoA* m_model = nullptr;
     std::vector<int> m_instanceToModelIndex;
-    QString m_colorAttribute = "Grade";
+    std::string m_colorAttribute = "Grade";
     float m_minRange = 0.0f;
     float m_maxRange = 1.0f;
     float m_minGrade = 0.0f;

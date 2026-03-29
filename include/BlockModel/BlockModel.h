@@ -141,11 +141,14 @@ struct BlockModelSoA
     std::vector<uint64_t> morton_key;
     std::unordered_map<std::string, std::vector<float>>       attributes;        // numeric
     std::unordered_map<std::string, std::vector<std::string>> string_attributes; // categorical
+    std::unordered_map<std::string, std::pair<float, float>>  attribute_ranges;  // min/max for each numeric attribute
 
     void add_attribute(const std::string& name)
     {
-        if (attributes.find(name) == attributes.end())
+        if (attributes.find(name) == attributes.end()) {
             attributes.emplace(name, std::vector<float>{});
+            attribute_ranges[name] = {0.0f, 0.0f};
+        }
     }
 
     void add_string_attribute(const std::string& name)
@@ -164,6 +167,7 @@ struct BlockModelSoA
         mined_state.clear(); visible.clear(); morton_key.clear();
         attributes.clear();
         string_attributes.clear();
+        attribute_ranges.clear();
     }
 
     void reserve(size_t n) {

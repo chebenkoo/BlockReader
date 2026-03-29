@@ -207,62 +207,12 @@ Window {
     }
 
     // Block properties panel
-    Rectangle {
+    BlockPropertyPanel {
         id: blockInfoPanel
         visible: false
-        width: 220
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        color: Qt.rgba(0.08, 0.08, 0.08, 0.92)
-        border.color: "#00ff88"
-        border.width: 1
-        z: 10
-
-        property var blockData: ({})
-
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 12
-            spacing: 6
-
-            RowLayout {
-                Layout.fillWidth: true
-                Text { text: "Block Properties"; color: "#00ff88"; font.bold: true; font.pixelSize: 13; Layout.fillWidth: true }
-                Text {
-                    text: "✕"; color: "#aaa"; font.pixelSize: 16
-                    MouseArea { anchors.fill: parent; onClicked: blockInfoPanel.visible = false }
-                }
-            }
-            Rectangle { Layout.fillWidth: true; height: 1; color: "#333" }
-
-            Repeater {
-                model: {
-                    var keys = Object.keys(blockInfoPanel.blockData).filter(k => k !== "_index");
-                    keys.sort();
-                    return keys;
-                }
-                delegate: RowLayout {
-                    Layout.fillWidth: true
-                    Text {
-                        text: modelData + ":";
-                        color: "#aaa"; font.pixelSize: 11
-                        Layout.preferredWidth: 70
-                        elide: Text.ElideRight
-                    }
-                    Text {
-                        text: {
-                            var v = blockInfoPanel.blockData[modelData];
-                            return (typeof v === "number") ? v.toFixed(4) : String(v);
-                        }
-                        color: "white"; font.pixelSize: 11; font.family: "Monospace"
-                        Layout.fillWidth: true
-                        elide: Text.ElideRight
-                    }
-                }
-            }
-            Item { Layout.fillHeight: true }
-        }
     }
 
     View3D {
