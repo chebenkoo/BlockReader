@@ -43,6 +43,8 @@ static double calculateBounds(const BlockModelSoA& model)
 class ModelController : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
+    Q_PROPERTY(double progress READ progress NOTIFY progressChanged)
+    Q_PROPERTY(bool isLoading READ isLoading NOTIFY isLoadingChanged)
     Q_PROPERTY(QStringList availableFields READ availableFields NOTIFY availableFieldsChanged)
     Q_PROPERTY(double modelRadius READ modelRadius NOTIFY boundsChanged)
 
@@ -52,6 +54,8 @@ public:
     QStringList availableFields() const { return m_availableFields; }
     double modelRadius() const { return m_modelRadius; }
     QString status() const { return m_status; }
+    double progress() const { return m_progress; }
+    bool isLoading() const { return m_isLoading; }
 
     Q_INVOKABLE void preScan(const QUrl &fileUrl) {
         QString path = fileUrl.toLocalFile();
@@ -82,6 +86,9 @@ public:
     Q_INVOKABLE void loadWithMapping(const QVariantMap &mapping) {
         if (m_isLoading) return;
         m_isLoading = true;
+        emit isLoadingChanged();
+        m_progress = 0.0;
+        emit progressChanged();
 
         m_status = "Loading...";
         emit statusChanged();
@@ -105,6 +112,21 @@ public:
                 {
                     auto t = Clock::now();
                     qDebug() << "[LOAD] Step 1: reading file...";
+
+                    auto progressCb = [this](const Reader::Progress& p) {
+                        double progressVal = 0.0;
+                        if (p.total_rows > 0)
+                            progressVal = (double)p.current_row / (double)p.total_rows;
+
+                        QMetaObject::invokeMethod(this, [this, progressVal, msg = QString::fromStdString(p.message)]() {
+                            // Scale Step 1 (Parsing) to 0.0 - 0.5 range
+                            m_progress = progressVal * 0.5;
+                            m_status = msg;
+                            emit progressChanged();
+                            emit statusChanged();
+                        });
+                    };
+
                     if (path.endsWith(".dat", Qt::CaseInsensitive)) {
                         localModel = SubprocessReader::load(path, stdMapping);
                     } else {
@@ -120,7 +142,7 @@ public:
                                 k != "XSPAN" && k != "YSPAN" && k != "ZSPAN")
                                 csvMap.attribute_map[k] = v;
                         }
-                        localModel = Reader::load_from_csv(path.toStdString(), csvMap);
+                        localModel = Reader::load_from_csv(path.toStdString(), csvMap, progressCb);
                     }
                     qDebug() << "[LOAD] Step 1 done:" << elapsed(t) << "ms —"
                              << localModel.size() << "blocks,"
@@ -129,10 +151,22 @@ public:
 
                 // ── Step 2: Centre + Morton sort (worker thread) ─────────────
                 {
+                    QMetaObject::invokeMethod(this, [this]() {
+                        m_status = "Centering Model...";
+                        m_progress = 0.5; // Roughly half way through total process
+                        emit statusChanged();
+                        emit progressChanged();
+                    });
                     auto t = Clock::now();
                     MicromineReader::center_model(localModel);
                     qDebug() << "[LOAD] center_model:" << elapsed(t) << "ms";
 
+                    QMetaObject::invokeMethod(this, [this]() {
+                        m_status = "Sorting (Morton)...";
+                        m_progress = 0.6;
+                        emit statusChanged();
+                        emit progressChanged();
+                    });
                     auto t2 = Clock::now();
                     localModel.sort_by_morton();
                     qDebug() << "[LOAD] sort_by_morton:" << elapsed(t2) << "ms";
@@ -144,6 +178,12 @@ public:
 
                 // Pre-calculate ranges for all numeric attributes on worker thread
                 {
+                    QMetaObject::invokeMethod(this, [this]() {
+                        m_status = "Computing Attribute Ranges...";
+                        m_progress = 0.8;
+                        emit statusChanged();
+                        emit progressChanged();
+                    });
                     auto t = Clock::now();
                     for (auto& [name, vec] : localModel.attributes) {
                         float minV = 1e30f, maxV = -1e30f;
@@ -195,27 +235,33 @@ public:
                     qDebug() << "[MAIN] swap done:"
                              << std::chrono::duration_cast<Ms2>(Clock2::now()-tm).count() << "ms";
 
-                    m_isLoading = false;
-                    m_status = QString("Loaded %1 blocks").arg(m_model.size());
-
                     // All Qt calls happen with the mutex free.
                     if (m_provider) {
-                        qDebug() << "[MAIN] calling setModel...";
-                        m_provider->setModel(&m_model);
-                        qDebug() << "[MAIN] setModel done";
-
-                        qDebug() << "[MAIN] emitting availableFieldsChanged...";
-                        emit availableFieldsChanged();
-                        qDebug() << "[MAIN] availableFieldsChanged done";
-
+                        // setColorAttribute BEFORE setModel: m_provider->m_model is null
+                        // here so getInstanceBuffer() returns early — render thread never
+                        // reads m_colorAttribute yet. First real render (from setModel's
+                        // markDirty) already sees the correct attribute.
                         if (!m_availableFields.isEmpty()) {
                             qDebug() << "[MAIN] setColorAttribute:" << m_availableFields.first();
                             m_provider->setColorAttribute(m_availableFields.first());
                             qDebug() << "[MAIN] setColorAttribute done";
                         }
+
+                        qDebug() << "[MAIN] calling setModel...";
+                        m_provider->setModel(&m_model);
+                        qDebug() << "[MAIN] setModel done";
                     }
 
+                    emit availableFieldsChanged();
                     emit boundsChanged();
+
+                    // Mark complete only after all provider calls have returned so the
+                    // progress bar stays visible until the model is actually on screen.
+                    m_status = QString("Loaded %1 blocks").arg(m_model.size());
+                    m_progress = 1.0;
+                    emit progressChanged();
+                    m_isLoading = false;
+                    emit isLoadingChanged();
                     emit statusChanged();
                     qDebug() << "[MAIN] done:"
                              << std::chrono::duration_cast<Ms2>(Clock2::now()-tm).count() << "ms";
@@ -224,14 +270,20 @@ public:
             } catch (const std::exception &e) {
                 qDebug() << "[LOAD] EXCEPTION:" << e.what();
                 QMetaObject::invokeMethod(this, [this, msg = QString(e.what())]() {
+                    m_progress = 0.0;
+                    emit progressChanged();
                     m_isLoading = false;
+                    emit isLoadingChanged();
                     m_status = "Load Error: " + msg;
                     emit statusChanged();
                 });
             } catch (...) {
                 qDebug() << "[LOAD] UNKNOWN EXCEPTION";
                 QMetaObject::invokeMethod(this, [this]() {
+                    m_progress = 0.0;
+                    emit progressChanged();
                     m_isLoading = false;
+                    emit isLoadingChanged();
                     m_status = "Load Error: unknown";
                     emit statusChanged();
                 });
@@ -244,6 +296,8 @@ public:
 
 signals:
     void statusChanged();
+    void progressChanged();
+    void isLoadingChanged();
     void availableFieldsChanged();
     void boundsChanged();
 
@@ -253,6 +307,7 @@ private:
     SpatialIndex        m_index;
     BlockModelProvider* m_provider   = nullptr;
     QString             m_status     = "Ready";
+    double              m_progress   = 0.0;
     QStringList         m_availableFields;
     QString             m_lastPath;
     double              m_modelRadius = 1000;

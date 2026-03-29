@@ -179,6 +179,15 @@ struct BlockModelSoA
         for (auto& [_, vec] : string_attributes) vec.reserve(n);
     }
 
+    void shrink_to_fit() {
+        x.shrink_to_fit(); y.shrink_to_fit(); z.shrink_to_fit();
+        x_span.shrink_to_fit(); y_span.shrink_to_fit(); z_span.shrink_to_fit();
+        i.shrink_to_fit(); j.shrink_to_fit(); k.shrink_to_fit();
+        mined_state.shrink_to_fit(); visible.shrink_to_fit(); morton_key.shrink_to_fit();
+        for (auto& [_, vec] : attributes) vec.shrink_to_fit();
+        for (auto& [_, vec] : string_attributes) vec.shrink_to_fit();
+    }
+
     // Sort all parallel arrays by Morton key for cache-friendly memory layout.
     // Spatially adjacent blocks end up adjacent in memory, improving GPU/CPU
     // cache hit rate when building the instance buffer.

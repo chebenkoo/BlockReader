@@ -386,9 +386,57 @@ Window {
             Text { text: "Max Data Grade: " + blockProvider.gradeMax.toFixed(2); color: "#888"; font.pixelSize: 10 }
 
             Item { Layout.fillHeight: true }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 2
+                visible: modelController.isLoading
+
+                ProgressBar {
+                    id: loadProgress
+                    Layout.fillWidth: true
+                    // indeterminate while progress is unknown (e.g. .dat subprocess)
+                    indeterminate: modelController.progress <= 0
+                    value: modelController.progress
+                    background: Rectangle {
+                        implicitHeight: 6
+                        color: "#333"
+                        radius: 3
+                    }
+                    contentItem: Item {
+                        Rectangle {
+                            id: bar
+                            width: loadProgress.indeterminate ? (parent.width * 0.3) : (loadProgress.visualPosition * parent.width)
+                            height: parent.height
+                            radius: 3
+                            color: "#00ff88"
+                            
+                            NumberAnimation on x {
+                                running: loadProgress.indeterminate
+                                from: -bar.width
+                                to: loadProgress.width
+                                duration: 1000
+                                loops: Animation.Infinite
+                            }
+                        }
+                    }
+                }
+                Text {
+                    text: modelController.progress === 0 ? "..." : (modelController.progress * 100).toFixed(0) + "%"
+                    color: "#00ff88"
+                    font.pixelSize: 10
+                    Layout.alignment: Qt.AlignRight
+                }
+            }
+
             Rectangle {
                 Layout.fillWidth: true; height: 40; color: "#333"; radius: 4
-                Text { anchors.centerIn: parent; text: modelController.status; color: "#00ff00"; font.family: "Monospace"; font.pixelSize: 10 }
+                Text {
+                    anchors.centerIn: parent
+                    text: modelController.status
+                    color: modelController.isLoading ? "white" : "#00ff00"
+                    font.family: "Monospace"; font.pixelSize: 10
+                }
             }
         }
     }
