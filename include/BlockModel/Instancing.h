@@ -16,6 +16,7 @@ class BlockModelProvider : public QQuick3DInstancing {
     Q_PROPERTY(QString colorAttribute READ colorAttribute WRITE setColorAttribute NOTIFY colorAttributeChanged)
     Q_PROPERTY(float minRange READ minRange WRITE setMinRange NOTIFY rangeChanged)
     Q_PROPERTY(float maxRange READ maxRange WRITE setMaxRange NOTIFY rangeChanged)
+    Q_PROPERTY(float gradeMax READ gradeMax NOTIFY gradeMaxChanged)
     Q_PROPERTY(float minGrade READ minGrade WRITE setMinGrade NOTIFY minGradeChanged)
     Q_PROPERTY(float blockSize READ blockSize WRITE setBlockSize NOTIFY blockSizeChanged)
     Q_PROPERTY(bool gridMode READ gridMode WRITE setGridMode NOTIFY gridModeChanged)
@@ -48,9 +49,12 @@ public:
     bool gridMode() const { return m_gridMode; }
     void setGridMode(bool val);
 
+    float gradeMax() const { return m_gradeMax; }
+
 signals:
     void colorAttributeChanged();
     void rangeChanged();
+    void gradeMaxChanged();
     void minGradeChanged();
     void blockSizeChanged();
     void gridModeChanged();
@@ -63,6 +67,7 @@ private:
     float m_minRange = 0.0f;
     float m_maxRange = 1.0f;
     float m_minGrade = 0.0f;
+    float m_gradeMax = 1.0f;
     float m_blockSize = 1.0f;
     bool m_gridMode = true;
     float m_rotX = 0, m_rotY = 0, m_rotZ = 0;

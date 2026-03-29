@@ -406,8 +406,34 @@ Window {
             }
 
             Label { text: "Grade Cutoff:"; color: "#aaa" }
-            Slider { id: gradeSlider; Layout.fillWidth: true; from: 0.0; to: 10.0; value: 0.0; onValueChanged: blockProvider.minGrade = value }
-            Text { text: "Min: " + gradeSlider.value.toFixed(2); color: "white"; font.pixelSize: 10 }
+            RowLayout {
+                Layout.fillWidth: true
+                Slider {
+                    id: gradeSlider
+                    Layout.fillWidth: true
+                    from: 0.0
+                    to: blockProvider.gradeMax
+                    value: blockProvider.minGrade
+                    onMoved: blockProvider.minGrade = value
+                }
+                TextField {
+                    id: gradeInput
+                    text: gradeSlider.value.toFixed(3)
+                    Layout.preferredWidth: 60
+                    color: "white"
+                    font.pixelSize: 12
+                    background: Rectangle { color: "#333"; border.color: "#555"; radius: 2 }
+                    onEditingFinished: {
+                        let val = parseFloat(text);
+                        if (!isNaN(val)) {
+                            blockProvider.minGrade = Math.max(0, Math.min(val, gradeSlider.to));
+                        } else {
+                            text = gradeSlider.value.toFixed(3);
+                        }
+                    }
+                }
+            }
+            Text { text: "Max Data Grade: " + blockProvider.gradeMax.toFixed(2); color: "#888"; font.pixelSize: 10 }
 
             Item { Layout.fillHeight: true }
             Rectangle {

@@ -1,6 +1,7 @@
 #include "BlockModel/Instancing.h"
 #include <QtGui/qvector3d.h>
 #include <QtGui/qvector4d.h>
+#include <QtGui/qquaternion.h>
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -13,6 +14,8 @@ BlockModelProvider::~BlockModelProvider() = default;
 
 void BlockModelProvider::autoComputeRange() {
     if (!m_model || m_model->attributes.empty()) return;
+
+    // 1. Calculate range for Color Attribute
     auto it = m_model->attributes.find(m_colorAttribute.toStdString());
     if (it != m_model->attributes.end() && !it->second.empty()) {
         const auto& vec = it->second;
@@ -22,6 +25,21 @@ void BlockModelProvider::autoComputeRange() {
             if (std::isfinite(v)) { min = std::min(min, v); max = std::max(max, v); found = true; }
         }
         if (found) { m_minRange = min; m_maxRange = (max > min) ? max : min + 1.0f; emit rangeChanged(); }
+    }
+
+    // 2. Calculate max for 'Grade' filtering slider
+    auto git = m_model->attributes.find("Grade");
+    if (git != m_model->attributes.end() && !git->second.empty()) {
+        float gMax = -1e30f;
+        bool gFound = false;
+        for (float v : git->second) {
+            if (std::isfinite(v)) { gMax = std::max(gMax, v); gFound = true; }
+        }
+        if (gFound && m_gradeMax != gMax) { m_gradeMax = gMax; emit gradeMaxChanged(); }
+    } else if (it != m_model->attributes.end() && m_gradeMax != m_maxRange) {
+        // Fallback to current color attribute if "Grade" is missing
+        m_gradeMax = m_maxRange;
+        emit gradeMaxChanged();
     }
 }
 
@@ -45,24 +63,10 @@ void BlockModelProvider::setModelRotation(float rx, float ry, float rz) { m_rotX
 QByteArray BlockModelProvider::getInstanceBuffer(int *instanceCount) {
     if (!m_model || m_model->empty()) { 
         *instanceCount = 0; 
-        std::cout << "BlockModelProvider: No model or empty!" << std::endl;
         return QByteArray(); 
     }
 
     const size_t count = m_model->size();
-    std::cout << "[Instancing] Building buffer: " << count << " blocks total\n";
-    std::cout << "[Instancing] colorAttribute='" << m_colorAttribute.toStdString()
-              << "' blockSize=" << m_blockSize
-              << " gridMode=" << m_gridMode
-              << " minGrade=" << m_minGrade << "\n";
-    std::cout << "[Instancing] Model x span count=" << m_model->x_span.size()
-              << " y_span=" << m_model->y_span.size()
-              << " z_span=" << m_model->z_span.size() << "\n";
-    std::cout << "[Instancing] Attributes loaded:";
-    for (auto const& [k, v] : m_model->attributes)
-        std::cout << " '" << k << "'(" << v.size() << ")";
-    std::cout << "\n";
-
     QByteArray instanceData;
     instanceData.resize(count * sizeof(InstanceTableEntry));
     auto* entry = reinterpret_cast<InstanceTableEntry*>(instanceData.data());
@@ -71,9 +75,6 @@ QByteArray BlockModelProvider::getInstanceBuffer(int *instanceCount) {
     auto it = m_model->attributes.find(m_colorAttribute.toStdString());
     if (it != m_model->attributes.end()) {
         attrValues = &it->second;
-        std::cout << "[Instancing] Color attribute found, size=" << attrValues->size() << "\n";
-    } else {
-        std::cout << "[Instancing] WARNING: color attribute '" << m_colorAttribute.toStdString() << "' not found\n";
     }
 
     const std::vector<float>* gradeValues = nullptr;
@@ -87,7 +88,7 @@ QByteArray BlockModelProvider::getInstanceBuffer(int *instanceCount) {
     m_instanceToModelIndex.clear();
     m_instanceToModelIndex.reserve(count);
 
-    // Derive fallback span from first valid block in the data, not a magic number
+    // Derive fallback span
     float fallback_sx = 10.0f, fallback_sy = 5.0f, fallback_sz = 10.0f;
     for (size_t fi = 0; fi < m_model->x_span.size(); ++fi) {
         if (m_model->x_span[fi] > 0.01f) {
@@ -97,78 +98,87 @@ QByteArray BlockModelProvider::getInstanceBuffer(int *instanceCount) {
             break;
         }
     }
-    std::cout << "[Instancing] Fallback span: sx=" << fallback_sx
-              << " sy=" << fallback_sy << " sz=" << fallback_sz << "\n";
 
-    int skippedNonFinite = 0, skippedInvisible = 0, skippedGrade = 0;
+    const float baseScale = m_blockSize / 100.0f;
+    const float visualScale = m_gridMode ? 0.95f : 1.0f;
+    const float finalScaleFactor = baseScale * visualScale;
+
+    const float range = m_maxRange - m_minRange;
+    const float invRange = (std::abs(range) > 0.0001f) ? 1.0f / range : 0.0f;
+
+    // Pre-compute rotation matrix from Euler angles ONCE (not 2.7M times)
+    const QQuaternion q = QQuaternion::fromEulerAngles(m_rotX, m_rotY, m_rotZ).normalized();
+    const float qw = q.scalar(), qx = q.x(), qy = q.y(), qz = q.z();
+    const float R00 = 1.f - 2.f*(qy*qy + qz*qz);
+    const float R01 = 2.f*(qx*qy - qw*qz);
+    const float R02 = 2.f*(qx*qz + qw*qy);
+    const float R10 = 2.f*(qx*qy + qw*qz);
+    const float R11 = 1.f - 2.f*(qx*qx + qz*qz);
+    const float R12 = 2.f*(qy*qz - qw*qx);
+    const float R20 = 2.f*(qx*qz - qw*qy);
+    const float R21 = 2.f*(qy*qz + qw*qx);
+    const float R22 = 1.f - 2.f*(qx*qx + qy*qy);
+
+    // Use raw pointers for maximum performance
+    const float* px = m_model->x.data();
+    const float* py = m_model->y.data();
+    const float* pz = m_model->z.data();
+    const float* psx = m_model->x_span.data();
+    const float* psy = m_model->y_span.data();
+    const float* psz = m_model->z_span.data();
+    const uint8_t* pvis = m_model->visible.empty() ? nullptr : m_model->visible.data();
+    const float* pattr = attrValues ? attrValues->data() : nullptr;
+    const float* pgrade = gradeValues ? gradeValues->data() : nullptr;
+
+    const size_t xspan_size = m_model->x_span.size();
+    const size_t yspan_size = m_model->y_span.size();
+    const size_t zspan_size = m_model->z_span.size();
+
     int addedCount = 0;
-    float xMin=1e30f, xMax=-1e30f, yMin=1e30f, yMax=-1e30f, zMin=1e30f, zMax=-1e30f;
-    float sxSample=0, sySample=0, szSample=0;
-
     for (size_t i = 0; i < count; ++i) {
-        if (!std::isfinite(m_model->x[i]) || !std::isfinite(m_model->y[i]) || !std::isfinite(m_model->z[i])) { skippedNonFinite++; continue; }
-        if (!m_model->visible.empty() && m_model->visible[i] == 0) { skippedInvisible++; continue; }
+        // 1. Skip invalid or invisible blocks
+        if (!std::isfinite(px[i]) || !std::isfinite(py[i]) || !std::isfinite(pz[i])) continue;
+        if (pvis && pvis[i] == 0) continue;
 
-        float gradeVal = (gradeValues && i < gradeValues->size()) ? (*gradeValues)[i] : 0.0f;
-        if (std::isfinite(gradeVal) && gradeVal < m_minGrade) { skippedGrade++; continue; }
+        // 2. Grade filtering
+        const float gradeVal = pgrade ? pgrade[i] : 0.0f;
+        if (std::isfinite(gradeVal) && gradeVal < m_minGrade) continue;
 
-        // Position: Z-up to Y-up mapping
-        QVector3D position(m_model->x[i], m_model->z[i], -m_model->y[i]);
+        // 3. Position (Z-up → Y-up)
+        const float tx = px[i];
+        const float ty = pz[i];
+        const float tz = -py[i];
 
-        // Track bounds of first 5 blocks for inspection
-        if (addedCount < 5) {
-            std::cout << "[Instancing] Block[" << addedCount << "] raw xyz=("
-                      << m_model->x[i] << "," << m_model->y[i] << "," << m_model->z[i]
-                      << ") spans=(" << m_model->x_span[i] << "," << m_model->y_span[i] << "," << m_model->z_span[i] << ")"
-                      << " -> pos=(" << position.x() << "," << position.y() << "," << position.z() << ")\n";
+        // 4. Per-block scale (already includes finalScaleFactor)
+        const float sx = ((psx && i < xspan_size && psx[i] > 0.01f) ? psx[i] : fallback_sx) * finalScaleFactor;
+        const float sy = ((psz && i < zspan_size && psz[i] > 0.01f) ? psz[i] : fallback_sy) * finalScaleFactor;
+        const float sz = ((psy && i < yspan_size && psy[i] > 0.01f) ? psy[i] : fallback_sz) * finalScaleFactor;
+
+        // 5. Directly pack TRS matrix (T*R*S, row-major) — no QMatrix4x4, no function call
+        auto& e = entry[addedCount];
+        e.row0 = QVector4D(sx*R00, sy*R01, sz*R02, tx);
+        e.row1 = QVector4D(sx*R10, sy*R11, sz*R12, ty);
+        e.row2 = QVector4D(sx*R20, sy*R21, sz*R22, tz);
+
+        // 6. Inline HSV→RGB (S=1, V=1, H in [0, 0.66]) — no QColor construction
+        const float val = pattr ? pattr[i] : 0.0f;
+        const float t = std::clamp((val - m_minRange) * invRange, 0.0f, 1.0f);
+        const float h6 = (1.0f - t) * 3.96f; // 0.66 * 6
+        const int sector = static_cast<int>(h6);
+        const float frac = h6 - sector;
+        float r, g, b;
+        switch (sector) {
+            case 0:  r = 1.f;       g = frac;       b = 0.f; break;
+            case 1:  r = 1.f-frac;  g = 1.f;        b = 0.f; break;
+            case 2:  r = 0.f;       g = 1.f;        b = frac; break;
+            default: r = 0.f;       g = 1.f-frac;   b = 1.f; break;
         }
+        e.color = QVector4D(r, g, b, 1.0f);
+        e.instanceData = QVector4D(val, 0.f, 0.f, 0.f);
 
-        xMin=std::min(xMin,position.x()); xMax=std::max(xMax,position.x());
-        yMin=std::min(yMin,position.y()); yMax=std::max(yMax,position.y());
-        zMin=std::min(zMin,position.z()); zMax=std::max(zMax,position.z());
-
-        // --- GRID vs VOXEL SCALE ---
-        float sx = (m_model->x_span.size() > i && m_model->x_span[i] > 0.01f) ? m_model->x_span[i] : fallback_sx;
-        float sy = (m_model->z_span.size() > i && m_model->z_span[i] > 0.01f) ? m_model->z_span[i] : fallback_sy;
-        float sz = (m_model->y_span.size() > i && m_model->y_span[i] > 0.01f) ? m_model->y_span[i] : fallback_sz;
-        if (addedCount == 0) { sxSample=sx; sySample=sy; szSample=sz; }
-
-        // In Grid Mode, we shrink blocks to 95% to see the boundaries
-        float visualScale = m_gridMode ? 0.95f : 1.0f;
-        // NOTE: Standard Qt Quick 3D #Cube is 100x100x100.
-        // To map 1 meter to 1 unit, we must divide our spans by 100.
-        QVector3D scale(
-            (sx / 100.0f) * m_blockSize * visualScale,
-            (sy / 100.0f) * m_blockSize * visualScale,
-            (sz / 100.0f) * m_blockSize * visualScale
-        );
-
-        float val = (attrValues && i < attrValues->size()) ? (*attrValues)[i] : 0.0f;
-        QColor color = mapValueToColor(val);
-
-        entry[addedCount] = calculateTableEntry(
-            position,
-            scale,
-            QVector3D(m_rotX, m_rotY, m_rotZ),
-            color,
-            QVector4D(val, 0, 0, 0)
-        );
-        m_instanceToModelIndex.push_back((int)i);
-        addedCount++;
+        m_instanceToModelIndex.push_back(static_cast<int>(i));
+        ++addedCount;
     }
-
-    std::cout << "[Instancing] Done: added=" << addedCount
-              << " skipped(nonFinite=" << skippedNonFinite
-              << " invisible=" << skippedInvisible
-              << " grade=" << skippedGrade << ")\n";
-    std::cout << "[Instancing] Scene bounds X[" << xMin << "," << xMax
-              << "] Y[" << yMin << "," << yMax
-              << "] Z[" << zMin << "," << zMax << "]\n";
-    std::cout << "[Instancing] Sample span(raw): sx=" << sxSample << " sy=" << sySample << " sz=" << szSample
-              << " -> scale=(" << (sxSample/100.f)*m_blockSize << ","
-              << (sySample/100.f)*m_blockSize << ","
-              << (szSample/100.f)*m_blockSize << ")\n";
-    std::cout << std::flush;
 
     *instanceCount = addedCount;
     instanceData.resize(addedCount * sizeof(InstanceTableEntry));
