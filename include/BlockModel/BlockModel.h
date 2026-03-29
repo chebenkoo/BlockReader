@@ -215,7 +215,48 @@ struct BlockModelSoA
         apply(i); apply(j); apply(k);
         apply(mined_state); apply(visible); apply(morton_key);
         for (auto& [_, vec] : attributes) apply(vec);
+        // For string_attributes, we need to sort both indices and then the pools.
+        // If the pools need to be sorted, it implies the string values themselves are associated with order,
+        // which isn't the case for interning. The indices are what reflect the block order.
+        // So we only sort the string_attribute_indices.
         for (auto& [_, vec] : string_attributes) apply(vec);
+    }
+
+    // Helper for memory diagnostics
+    size_t current_memory_usage() const {
+        size_t total_bytes = 0;
+
+        // Fixed-size vectors
+        total_bytes += x.capacity() * sizeof(float);
+        total_bytes += y.capacity() * sizeof(float);
+        total_bytes += z.capacity() * sizeof(float);
+        total_bytes += x_span.capacity() * sizeof(float);
+        total_bytes += y_span.capacity() * sizeof(float);
+        total_bytes += z_span.capacity() * sizeof(float);
+        total_bytes += i.capacity() * sizeof(int);
+        total_bytes += j.capacity() * sizeof(int);
+        total_bytes += k.capacity() * sizeof(int);
+        total_bytes += mined_state.capacity() * sizeof(uint8_t);
+        total_bytes += visible.capacity() * sizeof(uint8_t);
+        total_bytes += morton_key.capacity() * sizeof(uint64_t);
+
+        // Numeric attributes
+        for (const auto& pair : attributes) {
+            total_bytes += pair.second.capacity() * sizeof(float);
+        }
+
+        // String attributes (the suspected culprit)
+        for (const auto& pair : string_attributes) {
+            // Overhead of std::vector<std::string> itself
+            total_bytes += pair.second.capacity() * sizeof(std::string);
+            // Sum of string contents
+            for (const auto& s : pair.second) {
+                total_bytes += s.capacity(); // s.capacity() includes null terminator, approximately actual allocated bytes
+            }
+        }
+        // attribute_ranges map overhead is relatively small, can be ignored for gross estimation.
+
+        return total_bytes;
     }
 };
 

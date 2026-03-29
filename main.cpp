@@ -98,6 +98,8 @@ public:
         for (auto it = mapping.begin(); it != mapping.end(); ++it)
             stdMapping[it.key().toStdString()] = it.value().toString().toStdString();
 
+        qDebug() << "[MEM] Initial localModel (MB):" << localModel.current_memory_usage() / (1024.0 * 1024.0);
+
         QtConcurrent::run([this, path, stdMapping]() {
             using Clock = std::chrono::steady_clock;
             using Ms    = std::chrono::milliseconds;
@@ -147,6 +149,7 @@ public:
                     qDebug() << "[LOAD] Step 1 done:" << elapsed(t) << "ms —"
                              << localModel.size() << "blocks,"
                              << localModel.attributes.size() << "numeric attrs";
+                    qDebug() << "[MEM] localModel after Step 1 (MB):" << localModel.current_memory_usage() / (1024.0 * 1024.0);
                 }
 
                 // ── Step 2: Centre + Morton sort (worker thread) ─────────────
@@ -234,6 +237,8 @@ public:
 
                     qDebug() << "[MAIN] swap done:"
                              << std::chrono::duration_cast<Ms2>(Clock2::now()-tm).count() << "ms";
+                    qDebug() << "[MEM] m_model after move (MB):" << m_model.current_memory_usage() / (1024.0 * 1024.0);
+
 
                     // All Qt calls happen with the mutex free.
                     if (m_provider) {
