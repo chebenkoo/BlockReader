@@ -17,7 +17,11 @@ public:
     SpatialIndex();
     ~SpatialIndex();
 
-    // Disable copy for memory safety of internal CGAL structures
+    // Move construction/assignment for background processing
+    SpatialIndex(SpatialIndex&&) noexcept;
+    SpatialIndex& operator=(SpatialIndex&&) noexcept;
+
+    // Disable copy
     SpatialIndex(const SpatialIndex&) = delete;
     SpatialIndex& operator=(const SpatialIndex&) = delete;
 

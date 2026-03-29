@@ -2,9 +2,10 @@
 #include <QtGui/qvector3d.h>
 #include <QtGui/qvector4d.h>
 #include <QtGui/qquaternion.h>
+#include <QDebug>
 #include <algorithm>
 #include <cmath>
-#include <iostream>
+#include <chrono>
 
 namespace Mining {
 
@@ -61,10 +62,14 @@ void BlockModelProvider::setGridMode(bool val) {
 void BlockModelProvider::setModelRotation(float rx, float ry, float rz) { m_rotX = rx; m_rotY = ry; m_rotZ = rz; markDirty(); }
 
 QByteArray BlockModelProvider::getInstanceBuffer(int *instanceCount) {
-    if (!m_model || m_model->empty()) { 
-        *instanceCount = 0; 
-        return QByteArray(); 
+    if (!m_model || m_model->empty()) {
+        *instanceCount = 0;
+        return QByteArray();
     }
+
+    using Clock = std::chrono::steady_clock;
+    using Ms    = std::chrono::milliseconds;
+    const auto t0 = Clock::now();
 
     const size_t count = m_model->size();
     QByteArray instanceData;
@@ -182,6 +187,8 @@ QByteArray BlockModelProvider::getInstanceBuffer(int *instanceCount) {
 
     *instanceCount = addedCount;
     instanceData.resize(addedCount * sizeof(InstanceTableEntry));
+    qDebug() << "[RENDER] getInstanceBuffer END —" << addedCount << "/" << count
+             << "blocks in" << std::chrono::duration_cast<Ms>(Clock::now() - t0).count() << "ms";
     return instanceData;
 }
 

@@ -135,10 +135,6 @@ BlockModelSoA Reader::load_from_csv(
             int p = pass_count.count(internal_name) ? pass_count[internal_name] : 0;
             int f = fail_count.count(internal_name) ? fail_count[internal_name] : 0;
             col_types[internal_name] = (f > p) ? ColType::STRING : ColType::NUMERIC;
-            std::cout << "[Reader] Column '" << internal_name << "' ("
-                      << csv_header << "): "
-                      << (col_types[internal_name] == ColType::STRING ? "STRING" : "NUMERIC")
-                      << " (pass=" << p << " fail=" << f << ")\n";
         }
     }
 
@@ -224,35 +220,13 @@ BlockModelSoA Reader::load_from_csv(
         }
 
         count++;
-        if (callback && count % 100000 == 0) callback({count, 0, "Loading SoA Blocks..."});
+        if (callback && count % 50000 == 0) {
+            size_t current_pos = file.tellg();
+            callback({current_pos, file_size, "Parsing Blocks..."});
+        }
     }
 
     // --- Load summary ---
-    std::cout << "[Reader] Loaded " << count << " blocks from: " << file_path << "\n";
-    std::cout << "[Reader] Column mapping: X='" << mapping.x_col << "'(" << idx_x
-              << ") Y='" << mapping.y_col << "'(" << idx_y
-              << ") Z='" << mapping.z_col << "'(" << idx_z << ")\n";
-    std::cout << "[Reader] Span columns: XS='" << mapping.x_span_col << "'(" << idx_xs
-              << ") YS='" << mapping.y_span_col << "'(" << idx_ys
-              << ") ZS='" << mapping.z_span_col << "'(" << idx_zs << ")\n";
-    if (!model.x.empty()) {
-        float xMin=*std::min_element(model.x.begin(),model.x.end());
-        float xMax=*std::max_element(model.x.begin(),model.x.end());
-        float yMin=*std::min_element(model.y.begin(),model.y.end());
-        float yMax=*std::max_element(model.y.begin(),model.y.end());
-        float zMin=*std::min_element(model.z.begin(),model.z.end());
-        float zMax=*std::max_element(model.z.begin(),model.z.end());
-        std::cout << "[Reader] X range: [" << xMin << ", " << xMax << "]\n";
-        std::cout << "[Reader] Y range: [" << yMin << ", " << yMax << "]\n";
-        std::cout << "[Reader] Z range: [" << zMin << ", " << zMax << "]\n";
-        if (!model.x_span.empty())
-            std::cout << "[Reader] First block spans: xs=" << model.x_span[0]
-                      << " ys=" << model.y_span[0] << " zs=" << model.z_span[0] << "\n";
-    }
-    std::cout << "[Reader] Attributes:";
-    for (auto const& [k, v] : model.attributes) std::cout << " '" << k << "'(" << v.size() << ")";
-    std::cout << "\n" << std::flush;
-
     return model;
 }
 

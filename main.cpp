@@ -27,6 +27,7 @@ public:
 
     QStringList availableFields() const { return m_availableFields; }
     double modelRadius() const { return m_modelRadius; }
+    QString status() const { return m_status; }
 
     Q_INVOKABLE void preScan(const QUrl &fileUrl) {
         QString path = fileUrl.toLocalFile();
@@ -40,9 +41,7 @@ public:
                 std::ifstream f(path.toStdString());
                 std::string headerLine;
                 if (std::getline(f, headerLine)) {
-                    // Use a more robust split that handles quotes correctly
                     QString qHeader = QString::fromStdString(headerLine);
-                    // Remove quotes from the entire header line before splitting
                     qHeader.replace("\"", "");
                     m_availableFields = qHeader.split(QRegularExpression("[,\\s]+"), Qt::SkipEmptyParts);
                 }
@@ -57,111 +56,126 @@ public:
     }
 
     Q_INVOKABLE void loadWithMapping(const QVariantMap &mapping) {
+        using Clock = std::chrono::steady_clock;
+        using Ms    = std::chrono::milliseconds;
+        auto elapsed = [](Clock::time_point t0) {
+            return std::chrono::duration_cast<Ms>(Clock::now() - t0).count();
+        };
+
         m_status = "Loading...";
         emit statusChanged();
 
+        std::map<std::string, std::string> stdMapping;
+        for (auto it = mapping.begin(); it != mapping.end(); ++it)
+            stdMapping[it.key().toStdString()] = it.value().toString().toStdString();
+
+        const auto t_total = Clock::now();
+
         try {
-            std::map<std::string, std::string> stdMapping;
-            for (auto it = mapping.begin(); it != mapping.end(); ++it) {
-                stdMapping[it.key().toStdString()] = it.value().toString().toStdString();
+            // ── Step 1: Read file ──────────────────────────────────────────────
+            {
+                auto t = Clock::now();
+                qDebug() << "[LOAD] Step 1: reading file...";
+                if (m_lastPath.endsWith(".dat", Qt::CaseInsensitive)) {
+                    m_model = SubprocessReader::load(m_lastPath, stdMapping);
+                } else {
+                    ColumnMapping csvMap;
+                    csvMap.x_col = stdMapping.at("X");
+                    csvMap.y_col = stdMapping.at("Y");
+                    csvMap.z_col = stdMapping.at("Z");
+                    csvMap.x_span_col = stdMapping.count("XSPAN") ? stdMapping.at("XSPAN") : "";
+                    csvMap.y_span_col = stdMapping.count("YSPAN") ? stdMapping.at("YSPAN") : "";
+                    csvMap.z_span_col = stdMapping.count("ZSPAN") ? stdMapping.at("ZSPAN") : "";
+                    for (auto const& [k, v] : stdMapping) {
+                        if (k != "X" && k != "Y" && k != "Z" &&
+                            k != "XSPAN" && k != "YSPAN" && k != "ZSPAN")
+                            csvMap.attribute_map[k] = v;
+                    }
+                    m_model = Reader::load_from_csv(m_lastPath.toStdString(), csvMap);
+                }
+                qDebug() << "[LOAD] Step 1 done:" << elapsed(t) << "ms —"
+                         << m_model.size() << "blocks,"
+                         << m_model.attributes.size() << "numeric attrs,"
+                         << m_model.string_attributes.size() << "string attrs";
             }
 
-            if (m_lastPath.endsWith(".dat", Qt::CaseInsensitive)) {
-                m_model = SubprocessReader::load(m_lastPath, stdMapping);
-            } else {
-                ColumnMapping csvMap;
-                csvMap.x_col = stdMapping["X"];
-                csvMap.y_col = stdMapping["Y"];
-                csvMap.z_col = stdMapping["Z"];
-                csvMap.x_span_col = stdMapping.count("XSPAN") ? stdMapping["XSPAN"] : "";
-                csvMap.y_span_col = stdMapping.count("YSPAN") ? stdMapping["YSPAN"] : "";
-                csvMap.z_span_col = stdMapping.count("ZSPAN") ? stdMapping["ZSPAN"] : "";
-                
-                csvMap.attribute_map.clear();
-                for(auto const& [k, v] : stdMapping) {
-                    // Skip spatial keys, everything else is an attribute
-                    if (k != "X" && k != "Y" && k != "Z" && k != "XSPAN" && k != "YSPAN" && k != "ZSPAN") {
-                        csvMap.attribute_map[k] = v;
+            // ── Step 2: Centre + Morton sort ───────────────────────────────────
+            {
+                auto t = Clock::now();
+                MicromineReader::center_model(m_model);
+                qDebug() << "[LOAD] center_model:" << elapsed(t) << "ms";
+
+                auto t2 = Clock::now();
+                m_model.sort_by_morton();
+                qDebug() << "[LOAD] sort_by_morton:" << elapsed(t2) << "ms";
+            }
+
+            // ── Step 3: Bounding radius ────────────────────────────────────────
+            {
+                auto t = Clock::now();
+                float minX=1e30f, maxX=-1e30f;
+                float minY=1e30f, maxY=-1e30f;
+                float minZ=1e30f, maxZ=-1e30f;
+                bool found = false;
+                for (size_t i = 0; i < m_model.size(); ++i) {
+                    if (std::isfinite(m_model.x[i]) && std::isfinite(m_model.y[i]) && std::isfinite(m_model.z[i])) {
+                        minX=std::min(minX,m_model.x[i]); maxX=std::max(maxX,m_model.x[i]);
+                        minY=std::min(minY,m_model.y[i]); maxY=std::max(maxY,m_model.y[i]);
+                        minZ=std::min(minZ,m_model.z[i]); maxZ=std::max(maxZ,m_model.z[i]);
+                        found = true;
                     }
                 }
-                m_model = Reader::load_from_csv(m_lastPath.toStdString(), csvMap);
-            }
-            
-            qDebug() << "Load finished. Size:" << m_model.size();
-
-            MicromineReader::center_model(m_model);
-
-            // Calculate and log the centroid for verification
-            double sx=0, sy=0, sz=0; size_t count=0;
-            for(size_t i=0; i<m_model.size(); ++i) { sx+=m_model.x[i]; sy+=m_model.y[i]; sz+=m_model.z[i]; count++; }
-            qDebug() << "CENTROID (relative to model space):" << (count > 0 ? sx/count : 0) << "," << (count > 0 ? sy/count : 0);
-
-            // Sort by Morton key for cache-friendly memory layout
-            {
-                auto t0 = std::chrono::high_resolution_clock::now();
-                m_model.sort_by_morton();
-                auto t1 = std::chrono::high_resolution_clock::now();
-                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
-                qDebug() << "Morton sort: " << m_model.size() << "blocks sorted in" << ms << "ms";
+                if (found) {
+                    double dx=maxX-minX, dy=maxY-minY, dz=maxZ-minZ;
+                    m_modelRadius = std::sqrt(dx*dx + dy*dy + dz*dz) / 2.0;
+                    if (!std::isfinite(m_modelRadius) || m_modelRadius < 1.0) m_modelRadius = 100.0;
+                }
+                qDebug() << "[LOAD] bounds:" << elapsed(t) << "ms — radius:" << m_modelRadius;
             }
 
-            calculateBounds();
+            // ── Step 4: Field list ─────────────────────────────────────────────
+            m_availableFields.clear();
+            for (auto const& [name, _] : m_model.attributes)
+                m_availableFields << QString::fromStdString(name);
+            for (auto const& [name, _] : m_model.string_attributes)
+                m_availableFields << QString::fromStdString(name);
+            qDebug() << "[LOAD] fields:" << m_availableFields;
 
-            m_index.build(m_model);
+            // ── Step 5: Hand model to renderer ────────────────────────────────
+            qDebug() << "[LOAD] calling setModel...";
             if (m_provider) {
                 m_provider->setModel(&m_model);
-                
-                m_availableFields.clear();
-                for (auto const& [name, _] : m_model.attributes) {
-                    m_availableFields << QString::fromStdString(name);
-                }
+                qDebug() << "[LOAD] setModel done";
+
+                qDebug() << "[LOAD] emitting availableFieldsChanged...";
                 emit availableFieldsChanged();
+                qDebug() << "[LOAD] availableFieldsChanged done";
 
                 if (!m_availableFields.isEmpty()) {
+                    qDebug() << "[LOAD] calling setColorAttribute:" << m_availableFields.first();
                     m_provider->setColorAttribute(m_availableFields.first());
+                    qDebug() << "[LOAD] setColorAttribute done";
                 }
             }
+
+            qDebug() << "[LOAD] total:" << elapsed(t_total) << "ms";
             m_status = QString("Loaded %1 blocks").arg(m_model.size());
+            emit boundsChanged();
             emit statusChanged();
+
         } catch (const std::exception &e) {
+            qDebug() << "[LOAD] EXCEPTION:" << e.what();
             m_status = QString("Load Error: %1").arg(e.what());
             emit statusChanged();
+        } catch (...) {
+            qDebug() << "[LOAD] UNKNOWN EXCEPTION";
+            m_status = "Load Error: unknown";
+            emit statusChanged();
         }
-    }
-
-    void calculateBounds() {
-        if (m_model.empty()) return;
-        float minX = 1e30f, maxX = -1e30f;
-        float minY = 1e30f, maxY = -1e30f;
-        float minZ = 1e30f, maxZ = -1e30f;
-        bool foundAny = false;
-
-        for (size_t i = 0; i < m_model.size(); ++i) {
-            if (std::isfinite(m_model.x[i]) && std::isfinite(m_model.y[i]) && std::isfinite(m_model.z[i])) {
-                minX = std::min(minX, m_model.x[i]); maxX = std::max(maxX, m_model.x[i]);
-                minY = std::min(minY, m_model.y[i]); maxY = std::max(maxY, m_model.y[i]);
-                minZ = std::min(minZ, m_model.z[i]); maxZ = std::max(maxZ, m_model.z[i]);
-                foundAny = true;
-            }
-        }
-        
-        if (!foundAny) { m_modelRadius = 100; return; }
-
-        double dx = maxX - minX;
-        double dy = maxY - minY;
-        double dz = maxZ - minZ;
-        m_modelRadius = std::sqrt(dx*dx + dy*dy + dz*dz) / 2.0;
-        if (!std::isfinite(m_modelRadius) || m_modelRadius < 1.0) m_modelRadius = 100;
-        
-        qDebug() << "Model Bounds: min(" << minX << minY << minZ << ") max(" << maxX << maxY << maxZ << ")";
-        qDebug() << "Calculated Model Radius:" << m_modelRadius;
-
-        emit boundsChanged();
     }
 
     Q_INVOKABLE void loadModel(const QUrl &fileUrl) { preScan(fileUrl); }
     void setProvider(BlockModelProvider* p) { m_provider = p; }
-    QString status() const { return m_status; }
 
 signals:
     void statusChanged();

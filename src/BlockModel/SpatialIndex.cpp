@@ -45,6 +45,8 @@ struct SpatialIndex::Impl {
 
 SpatialIndex::SpatialIndex() : pimpl(std::make_unique<Impl>()) {}
 SpatialIndex::~SpatialIndex() = default;
+SpatialIndex::SpatialIndex(SpatialIndex&&) noexcept = default;
+SpatialIndex& SpatialIndex::operator=(SpatialIndex&&) noexcept = default;
 
 void SpatialIndex::build(const BlockModelSoA& model) {
     pimpl->clear();
