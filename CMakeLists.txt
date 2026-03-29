@@ -54,6 +54,7 @@ qt_add_qml_module(appMiningSchedule
     QML_FILES
         Main.qml
         AttributeRow.qml
+        BlockPropertyPanel.qml
 )
 
 target_link_libraries(appMiningSchedule
