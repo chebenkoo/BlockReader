@@ -296,9 +296,8 @@ QVariantMap BlockModelProvider::getBlockInfo(int instanceIndex) const {
         if (i < (int)v.size())
             result[QString::fromStdString(k)] = v[i];
     }
-    for (auto const& [k, v] : m_model->string_attributes) {
-        if (i < (int)v.size())
-            result[QString::fromStdString(k)] = QString::fromStdString(v[i]);
+    for (auto const& [k, interned] : m_model->string_attributes) {
+        result[QString::fromStdString(k)] = QString::fromStdString(interned.get(i));
     }
     return result;
 }

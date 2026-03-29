@@ -139,9 +139,41 @@ struct BlockModelSoA
     std::vector<uint8_t> mined_state;
     std::vector<uint8_t> visible;
     std::vector<uint64_t> morton_key;
-    std::unordered_map<std::string, std::vector<float>>       attributes;        // numeric
-    std::unordered_map<std::string, std::vector<std::string>> string_attributes; // categorical
-    std::unordered_map<std::string, std::pair<float, float>>  attribute_ranges;  // min/max for each numeric attribute
+    
+    // Numeric attributes (4 bytes per block)
+    std::unordered_map<std::string, std::vector<float>>       attributes;
+    
+    // Categorical attributes (Interned: 4 bytes per block + unique pool)
+    struct InternedString {
+        std::vector<int32_t>      indices; // index into unique_values
+        std::vector<std::string>  unique_values;
+
+        const std::string& get(size_t block_idx) const {
+            static const std::string empty = "";
+            if (block_idx >= indices.size()) return empty;
+            int32_t val_idx = indices[block_idx];
+            return (val_idx >= 0 && val_idx < (int32_t)unique_values.size()) ? unique_values[val_idx] : empty;
+        }
+
+        void reserve(size_t n) { indices.reserve(n); }
+        
+        void shrink_to_fit() { 
+            indices.shrink_to_fit(); 
+            unique_values.shrink_to_fit();
+        }
+        
+        void clear() { indices.clear(); unique_values.clear(); }
+        
+        size_t memory_usage() const {
+            size_t total = indices.capacity() * sizeof(int32_t);
+            total += unique_values.capacity() * sizeof(std::string);
+            for (const auto& s : unique_values) total += s.capacity();
+            return total;
+        }
+    };
+
+    std::unordered_map<std::string, InternedString>          string_attributes;
+    std::unordered_map<std::string, std::pair<float, float>>  attribute_ranges;
 
     void add_attribute(const std::string& name)
     {
@@ -154,7 +186,7 @@ struct BlockModelSoA
     void add_string_attribute(const std::string& name)
     {
         if (string_attributes.find(name) == string_attributes.end())
-            string_attributes.emplace(name, std::vector<std::string>{});
+            string_attributes[name] = InternedString{};
     }
 
     size_t size() const { return x.size(); }
@@ -215,11 +247,7 @@ struct BlockModelSoA
         apply(i); apply(j); apply(k);
         apply(mined_state); apply(visible); apply(morton_key);
         for (auto& [_, vec] : attributes) apply(vec);
-        // For string_attributes, we need to sort both indices and then the pools.
-        // If the pools need to be sorted, it implies the string values themselves are associated with order,
-        // which isn't the case for interning. The indices are what reflect the block order.
-        // So we only sort the string_attribute_indices.
-        for (auto& [_, vec] : string_attributes) apply(vec);
+        for (auto& [_, interned] : string_attributes) apply(interned.indices);
     }
 
     // Helper for memory diagnostics
@@ -227,34 +255,25 @@ struct BlockModelSoA
         size_t total_bytes = 0;
 
         // Fixed-size vectors
-        total_bytes += x.capacity() * sizeof(float);
-        total_bytes += y.capacity() * sizeof(float);
-        total_bytes += z.capacity() * sizeof(float);
-        total_bytes += x_span.capacity() * sizeof(float);
-        total_bytes += y_span.capacity() * sizeof(float);
-        total_bytes += z_span.capacity() * sizeof(float);
-        total_bytes += i.capacity() * sizeof(int);
-        total_bytes += j.capacity() * sizeof(int);
-        total_bytes += k.capacity() * sizeof(int);
-        total_bytes += mined_state.capacity() * sizeof(uint8_t);
-        total_bytes += visible.capacity() * sizeof(uint8_t);
-        total_bytes += morton_key.capacity() * sizeof(uint64_t);
+        auto vec_usage = [](const auto& v) {
+            using T = typename std::decay_t<decltype(v)>::value_type;
+            return v.capacity() * sizeof(T);
+        };
+
+        total_bytes += vec_usage(x) + vec_usage(y) + vec_usage(z);
+        total_bytes += vec_usage(x_span) + vec_usage(y_span) + vec_usage(z_span);
+        total_bytes += vec_usage(i) + vec_usage(j) + vec_usage(k);
+        total_bytes += vec_usage(mined_state) + vec_usage(visible) + vec_usage(morton_key);
 
         // Numeric attributes
         for (const auto& pair : attributes) {
-            total_bytes += pair.second.capacity() * sizeof(float);
+            total_bytes += vec_usage(pair.second);
         }
 
-        // String attributes (the suspected culprit)
+        // Categorical attributes (Interned)
         for (const auto& pair : string_attributes) {
-            // Overhead of std::vector<std::string> itself
-            total_bytes += pair.second.capacity() * sizeof(std::string);
-            // Sum of string contents
-            for (const auto& s : pair.second) {
-                total_bytes += s.capacity(); // s.capacity() includes null terminator, approximately actual allocated bytes
-            }
+            total_bytes += pair.second.memory_usage();
         }
-        // attribute_ranges map overhead is relatively small, can be ignored for gross estimation.
 
         return total_bytes;
     }

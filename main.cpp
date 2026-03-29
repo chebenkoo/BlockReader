@@ -98,9 +98,7 @@ public:
         for (auto it = mapping.begin(); it != mapping.end(); ++it)
             stdMapping[it.key().toStdString()] = it.value().toString().toStdString();
 
-        qDebug() << "[MEM] Initial localModel (MB):" << localModel.current_memory_usage() / (1024.0 * 1024.0);
-
-        QtConcurrent::run([this, path, stdMapping]() {
+        m_loadFuture = QtConcurrent::run([this, path, stdMapping]() {
             using Clock = std::chrono::steady_clock;
             using Ms    = std::chrono::milliseconds;
             auto elapsed = [](Clock::time_point t0) {
@@ -111,6 +109,7 @@ public:
             try {
                 // ── Step 1: Read (worker thread, no shared state touched) ───────
                 BlockModelSoA localModel;
+                qDebug() << "[MEM] Initial localModel (MB):" << localModel.current_memory_usage() / (1024.0 * 1024.0);
                 {
                     auto t = Clock::now();
                     qDebug() << "[LOAD] Step 1: reading file...";

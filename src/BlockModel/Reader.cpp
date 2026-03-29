@@ -87,37 +87,54 @@ BlockModelSoA Reader::load_from_csv(
     std::map<std::string, ColType> col_types;
     std::map<std::string, int> attr_indices;
     
-    // Quick probe for types (first 50 rows)
+    // Robust type probe (first 100 rows)
     {
         auto probe_pos = file.tellg();
-        std::map<std::string, int> pass_count;
+        std::map<std::string, int> numeric_count;
+        std::map<std::string, int> non_empty_count;
         std::string p_line;
-        int count = 0;
-        while (count < 50 && std::getline(file, p_line)) {
+        int rows_probed = 0;
+        while (rows_probed < 100 && std::getline(file, p_line)) {
             std::vector<std::string> row = split_line(p_line, delimiter);
             for (auto const& [name, csv_header] : mapping.attribute_map) {
                 int cidx = get_col(csv_header);
                 if (cidx >= 0 && cidx < (int)row.size()) {
-                    float tmp;
-                    auto res = fast_float::from_chars(row[cidx].data(), row[cidx].data() + row[cidx].size(), tmp);
-                    if (res.ec == std::errc()) pass_count[name]++;
+                    std::string_view val = trim_view(row[cidx]);
+                    if (!val.empty()) {
+                        non_empty_count[name]++;
+                        float tmp;
+                        auto res = fast_float::from_chars(val.data(), val.data() + val.size(), tmp);
+                        if (res.ec == std::errc()) numeric_count[name]++;
+                    }
                 }
             }
-            count++;
+            rows_probed++;
         }
         file.seekg(probe_pos);
         for (auto const& [name, _] : mapping.attribute_map) {
-            col_types[name] = (pass_count[name] > count / 2) ? ColType::NUMERIC : ColType::STRING;
+            // A column is numeric if >90% of its non-empty cells are valid numbers
+            if (non_empty_count[name] > 0) {
+                float ratio = (float)numeric_count[name] / non_empty_count[name];
+                col_types[name] = (ratio > 0.9f) ? ColType::NUMERIC : ColType::STRING;
+            } else {
+                col_types[name] = ColType::NUMERIC; // Default empty columns to numeric
+            }
         }
     }
 
     BlockModelSoA model;
+    std::map<std::string, std::unordered_map<std::string, int32_t>> local_intern_maps;
+
     for (auto const& [name, csv_header] : mapping.attribute_map) {
         int idx = get_col(csv_header);
         if (idx >= 0) {
             attr_indices[name] = idx;
-            if (col_types[name] == ColType::STRING) model.add_string_attribute(name);
-            else model.add_attribute(name);
+            if (col_types[name] == ColType::STRING) {
+                model.add_string_attribute(name);
+                local_intern_maps[name] = {};
+            } else {
+                model.add_attribute(name);
+            }
         }
     }
 
@@ -135,6 +152,9 @@ BlockModelSoA Reader::load_from_csv(
     }
     
     model.reserve(estimated_rows + 100);
+    for (auto& [name, interned] : model.string_attributes) {
+        interned.reserve(estimated_rows + 100);
+    }
 
     std::string line;
     size_t count = 0;
@@ -190,7 +210,23 @@ BlockModelSoA Reader::load_from_csv(
         for (auto const& [name, cidx] : attr_indices) {
             std::string_view val = (cidx < (int)row_views.size()) ? row_views[cidx] : "";
             if (col_types.at(name) == ColType::STRING) {
-                model.string_attributes[name].emplace_back(val);
+                auto& interned = model.string_attributes[name];
+                auto& lookup = local_intern_maps[name];
+                
+                if (val.empty()) {
+                    interned.indices.push_back(-1);
+                } else {
+                    std::string s(val);
+                    auto it = lookup.find(s);
+                    if (it == lookup.end()) {
+                        int32_t new_idx = (int32_t)interned.unique_values.size();
+                        interned.unique_values.push_back(s);
+                        lookup[s] = new_idx;
+                        interned.indices.push_back(new_idx);
+                    } else {
+                        interned.indices.push_back(it->second);
+                    }
+                }
             } else {
                 model.attributes[name].push_back(val.empty() ? 0.0f : parse_float(val));
             }
@@ -203,6 +239,10 @@ BlockModelSoA Reader::load_from_csv(
     }
 
     if (callback) callback({file_size, file_size, "Parsing complete."});
+    
+    // Explicitly destroy the local maps to free memory BEFORE returning the model
+    local_intern_maps.clear();
+    
     model.shrink_to_fit();
     return model;
 }
