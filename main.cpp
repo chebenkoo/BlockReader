@@ -16,6 +16,9 @@
 #include "BlockModel/Instancing.h"
 #include "BlockModel/ModelDiagnostics.h"
 
+// Convenience alias so log sites stay readable
+static size_t procMB() { return Mining::ModelDiagnostics::processMemoryMB(); }
+
 using namespace Qt::StringLiterals;
 using namespace Mining;
 
@@ -109,7 +112,8 @@ public:
             try {
                 // ── Step 1: Read (worker thread, no shared state touched) ───────
                 BlockModelSoA localModel;
-                qDebug() << "[MEM] Initial localModel (MB):" << localModel.current_memory_usage() / (1024.0 * 1024.0);
+                qDebug() << "[MEM] Initial localModel — model:" << localModel.current_memory_usage() / (1024.0 * 1024.0)
+                         << "MB | process:" << procMB() << "MB";
                 {
                     auto t = Clock::now();
                     qDebug() << "[LOAD] Step 1: reading file...";
@@ -148,7 +152,8 @@ public:
                     qDebug() << "[LOAD] Step 1 done:" << elapsed(t) << "ms —"
                              << localModel.size() << "blocks,"
                              << localModel.attributes.size() << "numeric attrs";
-                    qDebug() << "[MEM] localModel after Step 1 (MB):" << localModel.current_memory_usage() / (1024.0 * 1024.0);
+                    qDebug() << "[MEM] After Step 1 (parse) — model:" << localModel.current_memory_usage() / (1024.0 * 1024.0)
+                             << "MB | process:" << procMB() << "MB";
                 }
 
                 // ── Step 2: Centre + Morton sort (worker thread) ─────────────
@@ -160,8 +165,10 @@ public:
                         emit progressChanged();
                     });
                     auto t = Clock::now();
+                    qDebug() << "[MEM] Pre center_model — process:" << procMB() << "MB";
                     MicromineReader::center_model(localModel);
                     qDebug() << "[LOAD] center_model:" << elapsed(t) << "ms";
+                    qDebug() << "[MEM] Post center_model — process:" << procMB() << "MB";
 
                     QMetaObject::invokeMethod(this, [this]() {
                         m_status = "Sorting (Morton)...";
@@ -170,8 +177,12 @@ public:
                         emit progressChanged();
                     });
                     auto t2 = Clock::now();
+                    qDebug() << "[MEM] Pre sort_by_morton — model:" << localModel.current_memory_usage() / (1024.0 * 1024.0)
+                             << "MB | process:" << procMB() << "MB";
                     localModel.sort_by_morton();
                     qDebug() << "[LOAD] sort_by_morton:" << elapsed(t2) << "ms";
+                    qDebug() << "[MEM] Post sort_by_morton — model:" << localModel.current_memory_usage() / (1024.0 * 1024.0)
+                             << "MB | process:" << procMB() << "MB";
                 }
 
                 // ── Step 3: Bounds + field list (worker thread) ──────────────
@@ -208,68 +219,71 @@ public:
                 for (auto const& [name, _] : localModel.string_attributes)
                     fields << QString::fromStdString(name);
 
-                qDebug() << "[LOAD] background done:" << elapsed(t_total) << "ms — posting to main thread";
+                qDebug() << "[LOAD] background done:" << elapsed(t_total) << "ms — posting to main thread. Process:" << procMB() << "MB";
+
+                // Move model to heap and wrap in shared_ptr to guarantee zero copies during event capture.
+                qDebug() << "[LOAD] Moving localModel to heap (shared_ptr)...";
+                auto sharedModel = std::make_shared<BlockModelSoA>(std::move(localModel));
+                qDebug() << "[LOAD] Model moved to shared_ptr. process:" << procMB() << "MB";
 
                 // ── Step 4: Swap on main thread ──────────────────────────────
-                // All heavy work is finished. The lambda below runs on the main
-                // thread via QueuedConnection.
-                QMetaObject::invokeMethod(this,
-                    [this, model = std::move(localModel), fields, radius]() mutable
+                qDebug() << "[LOAD] Requesting QMetaObject::invokeMethod...";
+                bool postSuccess = QMetaObject::invokeMethod(this,
+                    [this, sharedModel, fields, radius]() mutable
                 {
+                    qDebug() << "[MAIN] lambda started — process:" << procMB() << "MB";
                     using Clock2 = std::chrono::steady_clock;
                     using Ms2    = std::chrono::milliseconds;
                     const auto tm = Clock2::now();
 
-                    // Narrow lock: only protects the move assignment.
-                    // Rule (Williams, ch.3): hold a mutex for the shortest
-                    // possible time; never call user-supplied code (signals,
-                    // virtual Qt methods) while holding it.
-                    // By the time setModel()/markDirty() runs below, the mutex
-                    // is already free — so getInstanceBuffer() can acquire it
-                    // without any re-entrancy.
                     {
+                        qDebug() << "[MAIN] acquiring mutex for swap...";
                         std::lock_guard<std::mutex> lock(ModelDiagnostics::modelMutex());
-                        m_model           = std::move(model);
+                        qDebug() << "[MAIN] mutex acquired. Moving model from shared_ptr...";
+                        m_model           = std::move(*sharedModel);
                         m_modelRadius     = radius;
                         m_availableFields = fields;
-                    } // ← mutex released here, before any Qt call
+                        qDebug() << "[MAIN] model moved. Mutex releasing...";
+                    } 
 
                     qDebug() << "[MAIN] swap done:"
                              << std::chrono::duration_cast<Ms2>(Clock2::now()-tm).count() << "ms";
-                    qDebug() << "[MEM] m_model after move (MB):" << m_model.current_memory_usage() / (1024.0 * 1024.0);
+                    qDebug() << "[MEM] After mutex swap — model:" << m_model.current_memory_usage() / (1024.0 * 1024.0)
+                             << "MB | process:" << procMB() << "MB";
 
-
-                    // All Qt calls happen with the mutex free.
                     if (m_provider) {
-                        // setColorAttribute BEFORE setModel: m_provider->m_model is null
-                        // here so getInstanceBuffer() returns early — render thread never
-                        // reads m_colorAttribute yet. First real render (from setModel's
-                        // markDirty) already sees the correct attribute.
                         if (!m_availableFields.isEmpty()) {
                             qDebug() << "[MAIN] setColorAttribute:" << m_availableFields.first();
                             m_provider->setColorAttribute(m_availableFields.first());
-                            qDebug() << "[MAIN] setColorAttribute done";
+                            qDebug() << "[MAIN] setColorAttribute done. process:" << procMB() << "MB";
                         }
 
-                        qDebug() << "[MAIN] calling setModel...";
+                        qDebug() << "[MAIN] calling setModel... process:" << procMB() << "MB";
                         m_provider->setModel(&m_model);
-                        qDebug() << "[MAIN] setModel done";
+                        qDebug() << "[MAIN] setModel done. process:" << procMB() << "MB";
                     }
 
+                    qDebug() << "[MAIN] emit availableFieldsChanged... process:" << procMB() << "MB";
                     emit availableFieldsChanged();
-                    emit boundsChanged();
+                    qDebug() << "[MAIN] emit availableFieldsChanged done. process:" << procMB() << "MB";
 
-                    // Mark complete only after all provider calls have returned so the
-                    // progress bar stays visible until the model is actually on screen.
+                    qDebug() << "[MAIN] emit boundsChanged... process:" << procMB() << "MB";
+                    emit boundsChanged();
+                    qDebug() << "[MAIN] emit boundsChanged done. process:" << procMB() << "MB";
+
                     m_status = QString("Loaded %1 blocks").arg(m_model.size());
                     m_progress = 1.0;
+                    qDebug() << "[MAIN] emit progressChanged... process:" << procMB() << "MB";
                     emit progressChanged();
+                    qDebug() << "[MAIN] emit progressChanged done. process:" << procMB() << "MB";
                     m_isLoading = false;
                     emit isLoadingChanged();
+                    qDebug() << "[MAIN] emit isLoadingChanged done. process:" << procMB() << "MB";
                     emit statusChanged();
                     qDebug() << "[MAIN] done:"
                              << std::chrono::duration_cast<Ms2>(Clock2::now()-tm).count() << "ms";
                 });
+                qDebug() << "[LOAD] invokeMethod returned:" << (postSuccess ? "SUCCESS" : "FAIL") << ". Worker thread finishing cleanup... Process:" << procMB() << "MB";
 
             } catch (const std::exception &e) {
                 qDebug() << "[LOAD] EXCEPTION:" << e.what();
@@ -320,6 +334,9 @@ private:
 
 int main(int argc, char *argv[])
 {
+    // Use Fusion style so TextField/Button background: customisation works
+    // and the native Windows style doesn't suppress our custom backgrounds.
+    qputenv("QT_QUICK_CONTROLS_STYLE", "Fusion");
     QGuiApplication app(argc, argv);
     qmlRegisterType<BlockModelProvider>("Mining", 1, 0, "BlockModelProvider");
     ModelController controller;

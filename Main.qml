@@ -20,6 +20,21 @@ Window {
         onAccepted: modelController.preScan(selectedFile)
     }
 
+    // Open the mapping dialog once when preScan finds fields.
+    // Do NOT use a reactive visible-binding — it would reopen the dialog
+    // when the main-thread lambda fires emit availableFieldsChanged() while
+    // status is still "Computing…", triggering 83-row QML creation that
+    // blocks the main thread and stalls the renderer.
+    Connections {
+        target: modelController
+        function onAvailableFieldsChanged() {
+            // Only open when idle (not loading) and fields are fresh from preScan.
+            if (modelController.availableFields.length > 0 && !modelController.isLoading) {
+                mappingDialog.open()
+            }
+        }
+    }
+
     Dialog {
         id: mappingDialog
         title: "Map Block Model Fields"
@@ -27,7 +42,6 @@ Window {
         height: Math.min(600, parent.height * 0.9)
         modal: true
         anchors.centerIn: parent
-        visible: modelController.availableFields.length > 0 && !modelController.status.includes("Loaded")
         standardButtons: Dialog.NoButton // We use our own "Load Model" button
 
         property var optionalFields: {
@@ -198,8 +212,8 @@ Window {
                             }
                         }
 
+                        mappingDialog.close()   // close first so isLoading=true prevents re-open
                         modelController.loadWithMapping(mapping)
-                        mappingDialog.close()
                     }
                 }
             }
