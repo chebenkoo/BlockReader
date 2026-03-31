@@ -156,70 +156,106 @@ Dialog {
         }
 
         // ── KPI Cards ────────────────────────────────────────────
-        RowLayout {
+        ColumnLayout {
             Layout.fillWidth: true
             Layout.topMargin: 12
             Layout.leftMargin: 14
             Layout.rightMargin: 14
-            spacing: 10
+            spacing: 6
 
-            Repeater {
-                model: [
-                    { label: "TOTAL BLOCKS",   value: totalBlocks.toLocaleString(Qt.locale(),'f',0),
-                      sub: tableData.length + " groups",              accent: "#00ff88", bg1: "#0a2318", bg2: "#0e2b1e" },
-                    { label: "TOTAL VOLUME",   value: (totalVolume/1e6).toFixed(3) + " Mm³",
-                      sub: totalVolume.toLocaleString(Qt.locale(),'f',0) + " m³",   accent: "#00aaff", bg1: "#0a1a2b", bg2: "#0e2035" },
-                    { label: "TOTAL TONNES",   value: (totalTonnes/1e6).toFixed(3) + " Mt",
-                      sub: totalTonnes.toLocaleString(Qt.locale(),'f',0) + " t",    accent: "#ffaa00", bg1: "#261a00", bg2: "#2e2000" },
-                    { label: "AVG GRADE",      value: overallAvgGrade.toFixed(5),
-                      sub: gradeCombo.currentText || "—",                             accent: "#cc44ff", bg1: "#200e2e", bg2: "#281438" }
-                ]
+            // Row 1: always-visible model totals
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
 
-                delegate: Rectangle {
-                    Layout.fillWidth: true
-                    height: 76
-                    radius: 8
-                    gradient: Gradient {
-                        orientation: Gradient.Horizontal
-                        GradientStop { position: 0.0; color: modelData.bg1 }
-                        GradientStop { position: 1.0; color: modelData.bg2 }
+                Repeater {
+                    model: [
+                        { label: "TOTAL BLOCKS",  value: totalBlocks.toLocaleString(Qt.locale(),'f',0),
+                          sub: allData.length + " groups",                              accent: "#00ff88", bg1: "#0a2318", bg2: "#0e2b1e" },
+                        { label: "TOTAL VOLUME",  value: (totalVolume/1e6).toFixed(3) + " Mm³",
+                          sub: totalVolume.toLocaleString(Qt.locale(),'f',0) + " m³",  accent: "#00aaff", bg1: "#0a1a2b", bg2: "#0e2035" },
+                        { label: "TOTAL TONNES",  value: (totalTonnes/1e6).toFixed(3) + " Mt",
+                          sub: totalTonnes.toLocaleString(Qt.locale(),'f',0) + " t",   accent: "#ffaa00", bg1: "#261a00", bg2: "#2e2000" },
+                        { label: "AVG GRADE",     value: overallAvgGrade.toFixed(5),
+                          sub: gradeCombo.currentText || "—",                           accent: "#cc44ff", bg1: "#200e2e", bg2: "#281438" }
+                    ]
+                    delegate: Rectangle {
+                        Layout.fillWidth: true; height: 72; radius: 8
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: modelData.bg1 }
+                            GradientStop { position: 1.0; color: modelData.bg2 }
+                        }
+                        border.color: Qt.rgba(Qt.color(modelData.accent).r, Qt.color(modelData.accent).g, Qt.color(modelData.accent).b, 0.25)
+                        border.width: 1
+                        Rectangle {
+                            anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
+                            anchors.topMargin: 8; anchors.bottomMargin: 8; width: 3; radius: 2; color: modelData.accent
+                        }
+                        ColumnLayout {
+                            anchors.fill: parent; anchors.margins: 12; anchors.leftMargin: 18; spacing: 2
+                            Text { text: modelData.label;  color: modelData.accent; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1.8 }
+                            Text { text: modelData.value;  color: "white";          font.pixelSize: 19; font.bold: true; font.family: "Monospace" }
+                            Text { text: modelData.sub;    color: "#666";           font.pixelSize: 10; elide: Text.ElideRight; Layout.fillWidth: true }
+                        }
                     }
-                    border.color: Qt.rgba(
-                        Qt.color(modelData.accent).r,
-                        Qt.color(modelData.accent).g,
-                        Qt.color(modelData.accent).b,
-                        0.25)
-                    border.width: 1
+                }
+            }
 
-                    // Accent line
-                    Rectangle {
-                        anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
-                        width: 3; color: modelData.accent; radius: 2
-                        anchors.topMargin: 8; anchors.bottomMargin: 8
-                    }
+            // Row 2: filtered subset — only shown when filter is active
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                visible: root.filterActive && tableData.length > 0
 
+                // Filter label tag
+                Rectangle {
+                    height: 42; radius: 6
+                    width: 110
+                    color: "#1e1a00"; border.color: "#ffcc0040"; border.width: 1
                     ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 12
-                        anchors.leftMargin: 18
-                        spacing: 3
+                        anchors.centerIn: parent; spacing: 2
+                        Text { text: "FILTERED"; color: "#ffcc00"; font.pixelSize: 8; font.bold: true; font.letterSpacing: 2; anchors.horizontalCenter: parent.horizontalCenter }
+                        Text {
+                            text: filterValCombo.currentText
+                            color: "white"; font.pixelSize: 11; font.bold: true
+                            elide: Text.ElideRight; width: 90; horizontalAlignment: Text.AlignHCenter
+                        }
+                    }
+                }
 
-                        Text {
-                            text: modelData.label
-                            color: modelData.accent
-                            font.pixelSize: 9; font.bold: true; font.letterSpacing: 1.8
+                Repeater {
+                    model: [
+                        { label: "BLOCKS",  rawV: totalBlocks, filtV: filtBlocks,  fmt: function(v) { return v.toLocaleString(Qt.locale(),'f',0); }, accent: "#00ff88" },
+                        { label: "VOLUME",  rawV: totalVolume, filtV: filtVolume,  fmt: function(v) { return (v/1e6).toFixed(3)+" Mm³"; },          accent: "#00aaff" },
+                        { label: "TONNES",  rawV: totalTonnes, filtV: filtTonnes,  fmt: function(v) { return (v/1e6).toFixed(3)+" Mt"; },           accent: "#ffaa00" },
+                        { label: "GRADE",   rawV: overallAvgGrade, filtV: filtAvgGrade, fmt: function(v) { return v.toFixed(5); },                  accent: "#cc44ff" }
+                    ]
+                    delegate: Rectangle {
+                        Layout.fillWidth: true; height: 42; radius: 6
+                        color: "#181818"; border.color: Qt.rgba(Qt.color(modelData.accent).r, Qt.color(modelData.accent).g, Qt.color(modelData.accent).b, 0.2)
+                        border.width: 1
+
+                        // Fraction fill bar
+                        Rectangle {
+                            anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
+                            anchors.margins: 1
+                            width: modelData.rawV > 0 ? Math.max(8, (modelData.filtV / modelData.rawV) * parent.width) : 0
+                            radius: 5
+                            color: Qt.rgba(Qt.color(modelData.accent).r, Qt.color(modelData.accent).g, Qt.color(modelData.accent).b, 0.08)
                         }
-                        Text {
-                            text: modelData.value
-                            color: "white"
-                            font.pixelSize: 19; font.bold: true; font.family: "Monospace"
-                        }
-                        Text {
-                            text: modelData.sub
-                            color: "#666"
-                            font.pixelSize: 10
-                            elide: Text.ElideRight
-                            Layout.fillWidth: true
+
+                        ColumnLayout {
+                            anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 6; spacing: 1; anchors.topMargin: 5
+                            Text { text: modelData.label; color: modelData.accent; font.pixelSize: 8; font.bold: true; font.letterSpacing: 1.5 }
+                            RowLayout {
+                                spacing: 4
+                                Text { text: modelData.fmt(modelData.filtV); color: "white"; font.pixelSize: 12; font.bold: true; font.family: "Monospace" }
+                                Text {
+                                    text: modelData.rawV > 0 ? "(" + (modelData.filtV/modelData.rawV*100).toFixed(1) + "%)" : ""
+                                    color: "#555"; font.pixelSize: 9; font.family: "Monospace"
+                                }
+                            }
                         }
                     }
                 }
@@ -624,7 +660,11 @@ Dialog {
         var fField  = (filterAttrCombo.currentText === "(None)")      ? "" : filterAttrCombo.currentText;
         var fValue  = filterValCombo.currentText;
 
-        root.tableData   = modelController.getSummary(groupCombo.currentText, gradeCombo.currentText, density, fField, fValue);
+        // Always fetch unfiltered totals for KPI cards
+        root.allData     = modelController.getSummary(groupCombo.currentText, gradeCombo.currentText, density, "", "");
+        // Fetch filtered (same as allData when no filter)
+        root.tableData   = (fField !== "") ? modelController.getSummary(groupCombo.currentText, gradeCombo.currentText, density, fField, fValue)
+                                           : root.allData;
         root.selectedRow = -1;
     }
 
