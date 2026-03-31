@@ -44,7 +44,7 @@ Dialog {
         var s = 0; for (var i = 0; i < allData.length; i++) s += allData[i].metal; return s;
     }
     readonly property double overallAvgGrade: {
-        return totalVolume > 0 ? totalMetal / totalVolume : 0;
+        return totalTonnes > 0 ? totalMetal / totalTonnes : 0;
     }
 
     // Filtered subset totals (same as above when no filter)
@@ -61,7 +61,7 @@ Dialog {
         var s = 0; for (var i = 0; i < tableData.length; i++) s += tableData[i].metal; return s;
     }
     readonly property double filtAvgGrade: {
-        return filtVolume > 0 ? filtMetal / filtVolume : 0;
+        return filtTonnes > 0 ? filtMetal / filtTonnes : 0;
     }
 
     readonly property double maxVolume: {
