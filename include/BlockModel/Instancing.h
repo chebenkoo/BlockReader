@@ -70,7 +70,16 @@ private:
     float m_blockSize = 1.0f;
     bool m_gridMode = true;
     float m_rotX = 0, m_rotY = 0, m_rotZ = 0;
-    
+
+    // Pre-converted column descriptors — built once in setModel so that
+    // getBlockInfo never calls QString::fromStdString on a hot click path.
+    struct CachedColumn {
+        QString                              qname;
+        const std::vector<float>*            numeric  = nullptr;  // non-null for float columns
+        const BlockModelSoA::InternedString* interned = nullptr;  // non-null for string columns
+    };
+    std::vector<CachedColumn> m_cachedColumns;
+
     QColor mapValueToColor(float value) const;
 };
 

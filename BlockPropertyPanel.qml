@@ -131,34 +131,64 @@ Rectangle {
                     color: index % 2 === 0 ? "transparent" : "#1a1a1a"
                     radius: 2
 
-                    ColumnLayout {
+                    readonly property var spatialKeys: ["X", "Y", "Z", "X_span", "Y_span", "Z_span"]
+                    readonly property bool isSpatial: spatialKeys.indexOf(modelData) !== -1
+                    readonly property bool isString: typeof root.blockData[modelData] === "string"
+                    // fieldType: "spatial" | "string" | "numeric"
+                    readonly property string fieldType: isSpatial ? "spatial" : (isString ? "string" : "numeric")
+
+                    RowLayout {
                         anchors.fill: parent
                         anchors.margins: 4
-                        spacing: 1
+                        spacing: 4
 
-                        Text {
-                            text: modelData
-                            color: {
-                                let spatial = ["X", "Y", "Z", "X_span", "Y_span", "Z_span"];
-                                return spatial.indexOf(modelData) !== -1 ? "#00aaff" : "#aaa";
-                            }
-                            font.pixelSize: 10
-                            font.bold: true
-                            elide: Text.ElideRight
+                        ColumnLayout {
                             Layout.fillWidth: true
+                            spacing: 1
+
+                            Text {
+                                text: modelData
+                                color: isSpatial ? "#00aaff" : "#aaa"
+                                font.pixelSize: 10
+                                font.bold: true
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+
+                            Text {
+                                text: {
+                                    var v = root.blockData[modelData];
+                                    if (typeof v === "number") return v.toLocaleString(Qt.locale(), 'f', 4);
+                                    return String(v);
+                                }
+                                color: "white"
+                                font.pixelSize: 11
+                                font.family: "Monospace"
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
                         }
 
-                        Text {
-                            text: {
-                                var v = root.blockData[modelData];
-                                if (typeof v === "number") return v.toLocaleString(Qt.locale(), 'f', 4);
-                                return String(v);
+                        // Type badge
+                        Rectangle {
+                            width: 22
+                            height: 16
+                            radius: 3
+                            color: fieldType === "spatial" ? "#1a3a5c"
+                                 : fieldType === "string"  ? "#3a2000"
+                                 : "#0a2a1a"
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: fieldType === "spatial" ? "XYZ"
+                                    : fieldType === "string"  ? "S"
+                                    : "#"
+                                color: fieldType === "spatial" ? "#00aaff"
+                                     : fieldType === "string"  ? "#ff9900"
+                                     : "#00ff88"
+                                font.pixelSize: 8
+                                font.bold: true
                             }
-                            color: "white"
-                            font.pixelSize: 11
-                            font.family: "Monospace"
-                            elide: Text.ElideRight
-                            Layout.fillWidth: true
                         }
                     }
                 }

@@ -187,6 +187,32 @@ Window {
                     }
                 }
 
+                Rectangle { Layout.fillWidth: true; height: 1; color: "#444" }
+
+                Label { text: "Calculated Formulas (e.g. Volume):"; font.bold: true; font.pixelSize: 14 }
+                
+                ColumnLayout {
+                    id: formulasList
+                    Layout.fillWidth: true
+                    spacing: 8
+                }
+
+                Button {
+                    text: "＋ Add Custom Formula"
+                    Layout.fillWidth: true
+                    flat: false
+                    onClicked: {
+                        var component = Qt.createComponent("FormulaRow.qml");
+                        if (component.status === Component.Ready) {
+                            component.createObject(formulasList, {
+                                "internalName": "Volume",
+                                "expression": "XSPAN * YSPAN * ZSPAN",
+                                "availableFields": modelController.availableFields
+                            });
+                        }
+                    }
+                }
+
                 Item { Layout.preferredHeight: 20 }
 
                 Button {
@@ -212,8 +238,19 @@ Window {
                             }
                         }
 
+                        let formulas = [];
+                        for (var j = 0; j < formulasList.children.length; j++) {
+                            let fRow = formulasList.children[j];
+                            if (fRow && fRow.internalName && fRow.expression) {
+                                formulas.push({
+                                    "name": fRow.internalName,
+                                    "expr": fRow.expression
+                                });
+                            }
+                        }
+
                         mappingDialog.close()   // close first so isLoading=true prevents re-open
-                        modelController.loadWithMapping(mapping)
+                        modelController.loadWithMapping(mapping, formulas)
                     }
                 }
             }
@@ -227,6 +264,11 @@ Window {
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
+    }
+
+    // Analytics summary table
+    AnalyticsPanel {
+        id: analyticsPanel
     }
 
     View3D {
@@ -345,6 +387,13 @@ Window {
                     mainCamera.position = Qt.vector3d(0, 0, modelController.modelRadius * 2.5)
                     mainCamera.lookAt(blockModelNode)
                 }
+            }
+
+            Button {
+                text: "Show Statistics"
+                Layout.fillWidth: true
+                visible: modelController.status.includes("Loaded")
+                onClicked: analyticsPanel.open()
             }
 
             Text { text: "Visualization"; color: "white"; font.bold: true }

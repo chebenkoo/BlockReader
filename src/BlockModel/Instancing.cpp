@@ -26,6 +26,8 @@ void BlockModelProvider::setModel(const BlockModelSoA* model) {
     {
         std::lock_guard<std::mutex> lock(ModelDiagnostics::modelMutex());
         m_model = model;
+        m_cachedColumns.clear();
+
         if (m_model) {
             // 1. Set range for current Color Attribute from pre-calculated data
             auto it = m_model->attribute_ranges.find(m_colorAttribute);
@@ -46,6 +48,14 @@ void BlockModelProvider::setModel(const BlockModelSoA* model) {
                 m_gradeMax = m_maxRange;
                 gradeMaxChanged_sig = true;
             }
+
+            // 3. Pre-convert all column names to QStrings once.
+            //    getBlockInfo iterates this cache — no QString::fromStdString on each click.
+            m_cachedColumns.reserve(m_model->attributes.size() + m_model->string_attributes.size());
+            for (auto const& [name, vec] : m_model->attributes)
+                m_cachedColumns.push_back({ QString::fromStdString(name), &vec, nullptr });
+            for (auto const& [name, interned] : m_model->string_attributes)
+                m_cachedColumns.push_back({ QString::fromStdString(name), nullptr, &interned });
         }
     }
 
@@ -69,14 +79,23 @@ void BlockModelProvider::setColorAttribute(const QString &attr) {
             if (m_model) {
                 auto it = m_model->attribute_ranges.find(m_colorAttribute);
                 if (it != m_model->attribute_ranges.end()) {
+                    // Numeric attribute: use pre-computed range
                     m_minRange = it->second.first;
                     m_maxRange = it->second.second;
                     rangeChanged_sig = true;
-
-                    // Update gradeMax if "Grade" is missing
                     if (m_model->attribute_ranges.find("Grade") == m_model->attribute_ranges.end()) {
                         m_gradeMax = m_maxRange;
                         gradeMaxChanged_sig = true;
+                    }
+                } else {
+                    // String (categorical) attribute: range = [0, uniqueCount-1]
+                    auto sit = m_model->string_attributes.find(m_colorAttribute);
+                    if (sit != m_model->string_attributes.end()) {
+                        m_minRange = 0.0f;
+                        m_maxRange = static_cast<float>(
+                            sit->second.unique_values.empty() ? 1
+                            : sit->second.unique_values.size() - 1);
+                        rangeChanged_sig = true;
                     }
                 }
             }
@@ -155,6 +174,7 @@ void BlockModelProvider::setModelRotation(float rx, float ry, float rz) {
 }
 
 QByteArray BlockModelProvider::getInstanceBuffer(int *instanceCount) {
+    qDebug() << "[RENDER] getInstanceBuffer START — process:" << ModelDiagnostics::processMemoryMB() << "MB";
     std::lock_guard<std::mutex> lock(ModelDiagnostics::modelMutex());
 
     if (!m_model || m_model->empty()) {
@@ -168,13 +188,26 @@ QByteArray BlockModelProvider::getInstanceBuffer(int *instanceCount) {
 
     const size_t count = m_model->size();
     QByteArray instanceData;
-    instanceData.resize(count * sizeof(InstanceTableEntry));
+    qDebug() << "[RENDER] resizing instanceData to" << (count * sizeof(InstanceTableEntry)) / (1024*1024) << "MB...";
+    instanceData.resize(static_cast<qsizetype>(count * sizeof(InstanceTableEntry)));
+    qDebug() << "[RENDER] resized. Process:" << ModelDiagnostics::processMemoryMB() << "MB";
     auto* entry = reinterpret_cast<InstanceTableEntry*>(instanceData.data());
 
+    // Numeric colour attribute
     const std::vector<float>* attrValues = nullptr;
     auto it = m_model->attributes.find(m_colorAttribute);
-    if (it != m_model->attributes.end()) {
+    if (it != m_model->attributes.end())
         attrValues = &it->second;
+
+    // Categorical (string-interned) colour attribute
+    const BlockModelSoA::InternedString* strAttr   = nullptr;
+    int                                  strUnique  = 0;
+    if (!attrValues) {
+        auto sit = m_model->string_attributes.find(m_colorAttribute);
+        if (sit != m_model->string_attributes.end()) {
+            strAttr   = &sit->second;
+            strUnique = static_cast<int>(sit->second.unique_values.size());
+        }
     }
 
     const std::vector<float>* gradeValues = nullptr;
@@ -182,7 +215,7 @@ QByteArray BlockModelProvider::getInstanceBuffer(int *instanceCount) {
     if (git != m_model->attributes.end()) {
         gradeValues = &git->second;
     } else {
-        gradeValues = attrValues;
+        gradeValues = attrValues;   // fall back to colour attr if Grade missing
     }
 
     m_instanceToModelIndex.clear();
@@ -253,18 +286,44 @@ QByteArray BlockModelProvider::getInstanceBuffer(int *instanceCount) {
         e.row1 = QVector4D(sx*R10, sy*R11, sz*R12, ty);
         e.row2 = QVector4D(sx*R20, sy*R21, sz*R22, tz);
 
-        const float val = pattr ? pattr[i] : 0.0f;
-        const float t = std::clamp((val - m_minRange) * invRange, 0.0f, 1.0f);
-        const float h6 = (1.0f - t) * 3.96f; 
-        const int sector = static_cast<int>(h6);
-        const float frac = h6 - sector;
         float r, g, b;
-        switch (sector) {
-            case 0:  r = 1.f;       g = frac;       b = 0.f; break;
-            case 1:  r = 1.f-frac;  g = 1.f;        b = 0.f; break;
-            case 2:  r = 0.f;       g = 1.f;        b = frac; break;
-            default: r = 0.f;       g = 1.f-frac;   b = 1.f; break;
+        float val = 0.0f;
+
+        if (strAttr) {
+            // Categorical: map category index → evenly-spaced hue
+            int32_t catIdx = (i < strAttr->indices.size()) ? strAttr->indices[i] : 0;
+            if (catIdx < 0) catIdx = 0;
+            const float hue = (strUnique > 1)
+                ? static_cast<float>(catIdx % strUnique) / static_cast<float>(strUnique)
+                : 0.0f;
+            // HSV(hue,1,1) → RGB via fast sector math
+            const float h6 = hue * 5.9999f;
+            const int   sec  = static_cast<int>(h6);
+            const float frac = h6 - sec;
+            switch (sec) {
+                case 0:  r = 1.f;       g = frac;       b = 0.f; break;
+                case 1:  r = 1.f-frac;  g = 1.f;        b = 0.f; break;
+                case 2:  r = 0.f;       g = 1.f;        b = frac; break;
+                case 3:  r = 0.f;       g = 1.f-frac;   b = 1.f; break;
+                case 4:  r = frac;      g = 0.f;        b = 1.f; break;
+                default: r = 1.f;       g = 0.f;        b = 1.f-frac; break;
+            }
+            val = static_cast<float>(catIdx);
+        } else {
+            // Numeric: gradient blue→green→red
+            val = pattr ? pattr[i] : 0.0f;
+            const float t  = std::clamp((val - m_minRange) * invRange, 0.0f, 1.0f);
+            const float h6 = (1.0f - t) * 3.96f;
+            const int   sec  = static_cast<int>(h6);
+            const float frac = h6 - sec;
+            switch (sec) {
+                case 0:  r = 1.f;       g = frac;       b = 0.f; break;
+                case 1:  r = 1.f-frac;  g = 1.f;        b = 0.f; break;
+                case 2:  r = 0.f;       g = 1.f;        b = frac; break;
+                default: r = 0.f;       g = 1.f-frac;   b = 1.f; break;
+            }
         }
+
         e.color = QVector4D(r, g, b, 1.0f);
         e.instanceData = QVector4D(val, 0.f, 0.f, 0.f);
 
@@ -273,9 +332,11 @@ QByteArray BlockModelProvider::getInstanceBuffer(int *instanceCount) {
     }
 
     *instanceCount = addedCount;
-    instanceData.resize(addedCount * sizeof(InstanceTableEntry));
+    instanceData.resize(static_cast<qsizetype>(addedCount * sizeof(InstanceTableEntry)));
     qDebug() << "[RENDER] getInstanceBuffer END —" << addedCount << "/" << count
-             << "in" << std::chrono::duration_cast<Ms>(Clock::now() - t0).count() << "ms";
+             << "in" << std::chrono::duration_cast<Ms>(Clock::now() - t0).count() << "ms"
+             << "| instanceData:" << (addedCount * sizeof(InstanceTableEntry)) / (1024*1024) << "MB"
+             << "| process:" << ModelDiagnostics::processMemoryMB() << "MB";
     return instanceData;
 }
 
@@ -284,20 +345,26 @@ QVariantMap BlockModelProvider::getBlockInfo(int instanceIndex) const {
     QVariantMap result;
     if (!m_model || instanceIndex < 0 || instanceIndex >= (int)m_instanceToModelIndex.size())
         return result;
-    int i = m_instanceToModelIndex[instanceIndex];
-    result["_index"]  = i;
-    result["X"]       = m_model->x[i];
-    result["Y"]       = m_model->y[i];
-    result["Z"]       = m_model->z[i];
-    result["X_span"]  = (i < (int)m_model->x_span.size()) ? m_model->x_span[i] : 0.f;
-    result["Y_span"]  = (i < (int)m_model->y_span.size()) ? m_model->y_span[i] : 0.f;
-    result["Z_span"]  = (i < (int)m_model->z_span.size()) ? m_model->z_span[i] : 0.f;
-    for (auto const& [k, v] : m_model->attributes) {
-        if (i < (int)v.size())
-            result[QString::fromStdString(k)] = v[i];
-    }
-    for (auto const& [k, interned] : m_model->string_attributes) {
-        result[QString::fromStdString(k)] = QString::fromStdString(interned.get(i));
+    const int i = m_instanceToModelIndex[instanceIndex];
+
+    // Spatial fields — always present, always fast
+    result["_index"] = i;
+    result["X"]      = m_model->x[i];
+    result["Y"]      = m_model->y[i];
+    result["Z"]      = m_model->z[i];
+    result["X_span"] = (i < (int)m_model->x_span.size()) ? m_model->x_span[i] : 0.f;
+    result["Y_span"] = (i < (int)m_model->y_span.size()) ? m_model->y_span[i] : 0.f;
+    result["Z_span"] = (i < (int)m_model->z_span.size()) ? m_model->z_span[i] : 0.f;
+
+    // Attribute columns — use pre-converted QString keys (no alloc per click)
+    for (const auto& col : m_cachedColumns) {
+        if (col.numeric) {
+            if (i < (int)col.numeric->size())
+                result[col.qname] = (*col.numeric)[i];
+        } else if (col.interned) {
+            // interned.get() returns a const string& from the pool — one array lookup
+            result[col.qname] = QString::fromStdString(col.interned->get(i));
+        }
     }
     return result;
 }

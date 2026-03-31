@@ -15,6 +15,8 @@
 #include "BlockModel/SpatialIndex.h"
 #include "BlockModel/Instancing.h"
 #include "BlockModel/ModelDiagnostics.h"
+#include "BlockModel/FormulaEvaluator.h"
+#include "BlockModel/AnalyticsEngine.h"
 
 // Convenience alias so log sites stay readable
 static size_t procMB() { return Mining::ModelDiagnostics::processMemoryMB(); }
@@ -49,12 +51,68 @@ class ModelController : public QObject {
     Q_PROPERTY(double progress READ progress NOTIFY progressChanged)
     Q_PROPERTY(bool isLoading READ isLoading NOTIFY isLoadingChanged)
     Q_PROPERTY(QStringList availableFields READ availableFields NOTIFY availableFieldsChanged)
+    Q_PROPERTY(QStringList stringFields READ stringFields NOTIFY availableFieldsChanged)
+    Q_PROPERTY(QStringList numericFields READ numericFields NOTIFY availableFieldsChanged)
     Q_PROPERTY(double modelRadius READ modelRadius NOTIFY boundsChanged)
 
 public:
     explicit ModelController(QObject *parent = nullptr) : QObject(parent) {}
 
     QStringList availableFields() const { return m_availableFields; }
+    
+    QStringList stringFields() const { 
+        QStringList res;
+        std::lock_guard<std::mutex> lock(ModelDiagnostics::modelMutex());
+        for (auto const& [name, _] : m_model.string_attributes) res << QString::fromStdString(name);
+        return res;
+    }
+
+    QStringList numericFields() const { 
+        QStringList res;
+        std::lock_guard<std::mutex> lock(ModelDiagnostics::modelMutex());
+        for (auto const& [name, _] : m_model.attributes) res << QString::fromStdString(name);
+        return res;
+    }
+
+    Q_INVOKABLE QVariantList getSummary(const QString &groupField, const QString &gradeField, const QString &densityField = "", const QString &filterField = "", const QString &filterValue = "") {
+        std::lock_guard<std::mutex> lock(ModelDiagnostics::modelMutex());
+        if (m_model.empty()) return {};
+
+        auto results = AnalyticsEngine::computeSummary(
+            m_model, 
+            groupField.toStdString(), 
+            gradeField.toStdString(), 
+            densityField.toStdString(),
+            filterField.toStdString(),
+            filterValue.toStdString()
+        );
+
+        QVariantList list;
+        for (const auto& row : results) {
+            QVariantMap map;
+            map["group"] = QString::fromStdString(row.groupName);
+            map["count"] = (double)row.count;
+            map["volume"] = row.volume;
+            map["tonnes"] = row.tonnes;
+            map["avgGrade"] = row.avgGrade;
+            map["metal"] = row.metal;
+            list << map;
+        }
+        return list;
+    }
+
+    Q_INVOKABLE QStringList getStringValues(const QString &fieldName) {
+        std::lock_guard<std::mutex> lock(ModelDiagnostics::modelMutex());
+        QStringList res;
+        auto it = m_model.string_attributes.find(fieldName.toStdString());
+        if (it != m_model.string_attributes.end()) {
+            for (const auto& val : it->second.unique_values) {
+                res << QString::fromStdString(val);
+            }
+        }
+        return res;
+    }
+
     double modelRadius() const { return m_modelRadius; }
     QString status() const { return m_status; }
     double progress() const { return m_progress; }
@@ -86,7 +144,7 @@ public:
         }
     }
 
-    Q_INVOKABLE void loadWithMapping(const QVariantMap &mapping) {
+    Q_INVOKABLE void loadWithMapping(const QVariantMap &mapping, const QVariantList &formulas = {}) {
         if (m_isLoading) return;
         m_isLoading = true;
         emit isLoadingChanged();
@@ -101,7 +159,16 @@ public:
         for (auto it = mapping.begin(); it != mapping.end(); ++it)
             stdMapping[it.key().toStdString()] = it.value().toString().toStdString();
 
-        m_loadFuture = QtConcurrent::run([this, path, stdMapping]() {
+        std::vector<FormulaEvaluator::Formula> stdFormulas;
+        for (const QVariant& f : formulas) {
+            QVariantMap fm = f.toMap();
+            stdFormulas.push_back({
+                fm["name"].toString().toStdString(),
+                fm["expr"].toString().toStdString()
+            });
+        }
+
+        m_loadFuture = QtConcurrent::run([this, path, stdMapping, stdFormulas]() {
             using Clock = std::chrono::steady_clock;
             using Ms    = std::chrono::milliseconds;
             auto elapsed = [](Clock::time_point t0) {
@@ -152,8 +219,23 @@ public:
                     qDebug() << "[LOAD] Step 1 done:" << elapsed(t) << "ms —"
                              << localModel.size() << "blocks,"
                              << localModel.attributes.size() << "numeric attrs";
-                    qDebug() << "[MEM] After Step 1 (parse) — model:" << localModel.current_memory_usage() / (1024.0 * 1024.0)
-                             << "MB | process:" << procMB() << "MB";
+                }
+
+                // ── Step 1.5: Calculate Formulas ─────────────────────────────
+                if (!stdFormulas.empty()) {
+                    QMetaObject::invokeMethod(this, [this]() {
+                        m_status = "Calculating Formulas...";
+                        m_progress = 0.55;
+                        emit statusChanged();
+                        emit progressChanged();
+                    });
+                    auto t = Clock::now();
+                    std::string err = FormulaEvaluator::evaluate(localModel, stdFormulas);
+                    if (!err.empty()) {
+                        qDebug() << "[LOAD] Formula error:" << err.c_str();
+                        // We continue loading but might want to notify user later.
+                    }
+                    qDebug() << "[LOAD] Formulas done:" << elapsed(t) << "ms";
                 }
 
                 // ── Step 2: Centre + Morton sort (worker thread) ─────────────

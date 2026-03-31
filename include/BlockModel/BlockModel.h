@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <numeric>
 #include <utility>
+#include <memory>
+#include <iostream>
 
 namespace Mining {
 
@@ -133,20 +135,43 @@ struct BlockModelAoS {
 // ---------------------------------------------------------------------------
 struct BlockModelSoA
 {
-    std::vector<float> x, y, z;           // centered coords — float is sufficient post-centering
+    std::vector<float> x, y, z;
     std::vector<float> x_span, y_span, z_span;
     std::vector<int>    i, j, k;
     std::vector<uint8_t> mined_state;
     std::vector<uint8_t> visible;
     std::vector<uint64_t> morton_key;
-    
-    // Numeric attributes (4 bytes per block)
-    std::unordered_map<std::string, std::vector<float>>       attributes;
-    
+
+    std::unordered_map<std::string, std::vector<float>> attributes;
+
+    BlockModelSoA() = default;
+    ~BlockModelSoA() = default;
+    BlockModelSoA(const BlockModelSoA&) = delete;
+    BlockModelSoA& operator=(const BlockModelSoA&) = delete;
+    BlockModelSoA(BlockModelSoA&& other) noexcept 
+        : x(std::move(other.x)), y(std::move(other.y)), z(std::move(other.z)),
+          x_span(std::move(other.x_span)), y_span(std::move(other.y_span)), z_span(std::move(other.z_span)),
+          i(std::move(other.i)), j(std::move(other.j)), k(std::move(other.k)),
+          mined_state(std::move(other.mined_state)), visible(std::move(other.visible)),
+          morton_key(std::move(other.morton_key)), attributes(std::move(other.attributes)),
+          string_attributes(std::move(other.string_attributes)), 
+          attribute_ranges(std::move(other.attribute_ranges))
+    {
+        std::cout << "[MOVE] BlockModelSoA moved (size: " << x.size() << ")" << std::endl;
+    }
+    BlockModelSoA& operator=(BlockModelSoA&&) noexcept = default;
+
     // Categorical attributes (Interned: 4 bytes per block + unique pool)
     struct InternedString {
         std::vector<int32_t>      indices; // index into unique_values
         std::vector<std::string>  unique_values;
+
+        InternedString() = default;
+        ~InternedString() = default;
+        InternedString(const InternedString&) = delete;
+        InternedString& operator=(const InternedString&) = delete;
+        InternedString(InternedString&&) noexcept = default;
+        InternedString& operator=(InternedString&&) noexcept = default;
 
         const std::string& get(size_t block_idx) const {
             static const std::string empty = "";
@@ -159,7 +184,7 @@ struct BlockModelSoA
         
         void shrink_to_fit() { 
             indices.shrink_to_fit(); 
-            unique_values.shrink_to_fit();
+            // unique_values.shrink_to_fit(); // DANGEROUS: Peak memory spike
         }
         
         void clear() { indices.clear(); unique_values.clear(); }
@@ -167,7 +192,11 @@ struct BlockModelSoA
         size_t memory_usage() const {
             size_t total = indices.capacity() * sizeof(int32_t);
             total += unique_values.capacity() * sizeof(std::string);
-            for (const auto& s : unique_values) total += s.capacity();
+            // Don't iterate millions of strings to call capacity(), it's too slow.
+            // Just use a heuristic or skip it for these diagnostics.
+            if (!unique_values.empty()) {
+                total += unique_values.size() * 16; // Heuristic: 16 bytes per string content
+            }
             return total;
         }
     };

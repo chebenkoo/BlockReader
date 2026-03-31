@@ -13,6 +13,13 @@ project(MiningSchedule VERSION 0.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(MSVC)
+    add_compile_definitions(NOMINMAX)          # prevent windows.h min/max macros globally
+    add_compile_options(/utf-8)                # treat source files as UTF-8
+    add_compile_options(/MP)                   # parallel compilation
+    add_compile_options(/wd4267 /wd4244)       # suppress common narrowing conversion warnings
+endif()
+
 # --- CGAL Configuration ---
 set(CGAL_HEADER_ONLY ON)
 set(CGAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/CGAL-6.1.1")
@@ -31,12 +38,16 @@ set(BLOCK_MODEL_SOURCES
     include/BlockModel/SpatialIndex.h
     include/BlockModel/Instancing.h
     include/BlockModel/Optimizer.h
+    include/BlockModel/FormulaEvaluator.h
+    include/BlockModel/AnalyticsEngine.h
     src/BlockModel/Reader.cpp
     src/BlockModel/SpatialIndex.cpp
     src/BlockModel/Instancing.cpp
     src/BlockModel/MicromineReader.cpp
     src/BlockModel/SubprocessReader.cpp
     src/BlockModel/Optimizer.cpp
+    src/BlockModel/FormulaEvaluator.cpp
+    src/BlockModel/AnalyticsEngine.cpp
 )
 
 qt_add_executable(appMiningSchedule
@@ -54,7 +65,9 @@ qt_add_qml_module(appMiningSchedule
     QML_FILES
         Main.qml
         AttributeRow.qml
+        FormulaRow.qml
         BlockPropertyPanel.qml
+        AnalyticsPanel.qml
 )
 
 target_link_libraries(appMiningSchedule

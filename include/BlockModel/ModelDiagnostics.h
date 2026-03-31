@@ -1,6 +1,15 @@
 #pragma once
 
 #include <mutex>
+#include <cstddef>
+
+#ifdef _WIN32
+#  ifndef NOMINMAX
+#    define NOMINMAX   // prevent windows.h from defining min/max macros
+#  endif
+#  include <windows.h>
+#  include <psapi.h>
+#endif
 
 namespace Mining::ModelDiagnostics {
 
@@ -14,6 +23,18 @@ inline std::mutex& modelMutex()
 {
     static std::mutex m;
     return m;
+}
+
+// Returns current process Working Set in MB (Windows).
+// Returns 0 on non-Windows builds.
+inline size_t processMemoryMB()
+{
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS pmc{};
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+        return pmc.WorkingSetSize / (1024ULL * 1024ULL);
+#endif
+    return 0;
 }
 
 } // namespace Mining::ModelDiagnostics
