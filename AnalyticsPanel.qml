@@ -21,35 +21,49 @@ Dialog {
     }
 
     // ── Data ─────────────────────────────────────────────────────
-    property var tableData: []
-    property int sortColumn: 2          // default: sort by volume desc
+    property var tableData: []      // current filtered rows
+    property var allData:   []      // always unfiltered — for KPI cards
+    property int sortColumn: 2      // default: sort by volume desc
     property bool sortAsc: false
     property int selectedRow: -1
 
-    // KPI totals
+    readonly property bool filterActive:
+        filterAttrCombo.currentIndex > 0 && filterValCombo.currentText !== ""
+
+    // KPI totals — always from unfiltered allData
     readonly property double totalBlocks: {
-        var s = 0;
-        for (var i = 0; i < tableData.length; i++) s += tableData[i].count;
-        return s;
+        var s = 0; for (var i = 0; i < allData.length; i++) s += allData[i].count; return s;
     }
     readonly property double totalVolume: {
-        var s = 0;
-        for (var i = 0; i < tableData.length; i++) s += tableData[i].volume;
-        return s;
+        var s = 0; for (var i = 0; i < allData.length; i++) s += allData[i].volume; return s;
     }
     readonly property double totalTonnes: {
-        var s = 0;
-        for (var i = 0; i < tableData.length; i++) s += tableData[i].tonnes;
-        return s;
+        var s = 0; for (var i = 0; i < allData.length; i++) s += allData[i].tonnes; return s;
     }
     readonly property double totalMetal: {
-        var s = 0;
-        for (var i = 0; i < tableData.length; i++) s += tableData[i].metal;
-        return s;
+        var s = 0; for (var i = 0; i < allData.length; i++) s += allData[i].metal; return s;
     }
     readonly property double overallAvgGrade: {
         return totalVolume > 0 ? totalMetal / totalVolume : 0;
     }
+
+    // Filtered subset totals (same as above when no filter)
+    readonly property double filtBlocks: {
+        var s = 0; for (var i = 0; i < tableData.length; i++) s += tableData[i].count; return s;
+    }
+    readonly property double filtVolume: {
+        var s = 0; for (var i = 0; i < tableData.length; i++) s += tableData[i].volume; return s;
+    }
+    readonly property double filtTonnes: {
+        var s = 0; for (var i = 0; i < tableData.length; i++) s += tableData[i].tonnes; return s;
+    }
+    readonly property double filtMetal: {
+        var s = 0; for (var i = 0; i < tableData.length; i++) s += tableData[i].metal; return s;
+    }
+    readonly property double filtAvgGrade: {
+        return filtVolume > 0 ? filtMetal / filtVolume : 0;
+    }
+
     readonly property double maxVolume: {
         var m = 0;
         for (var i = 0; i < tableData.length; i++) if (tableData[i].volume > m) m = tableData[i].volume;
@@ -121,8 +135,8 @@ Dialog {
                 }
 
                 Text {
-                    visible: tableData.length > 0
-                    text: tableData.length + " groups  ·  " + totalBlocks.toLocaleString(Qt.locale(), 'f', 0) + " blocks"
+                    visible: allData.length > 0
+                    text: allData.length + " groups  ·  " + totalBlocks.toLocaleString(Qt.locale(), 'f', 0) + " blocks total"
                     color: "#555"
                     font.pixelSize: 11
                 }
@@ -239,12 +253,22 @@ Dialog {
                         Layout.bottomMargin: 10 }
 
                     // Group By
-                    Text { text: "Group By"; color: "#777"; font.pixelSize: 11; Layout.bottomMargin: 4 }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.bottomMargin: 4
+                        Text { text: "Group By"; color: "#777"; font.pixelSize: 11; Layout.fillWidth: true }
+                        Text {
+                            text: modelController.stringFields.indexOf(groupCombo.currentText) >= 0 ? "S" : "#"
+                            color: modelController.stringFields.indexOf(groupCombo.currentText) >= 0 ? "#ff9900" : "#00aaff"
+                            font.pixelSize: 9; font.bold: true
+                            visible: groupCombo.currentText !== ""
+                        }
+                    }
                     ComboBox {
                         id: groupCombo
                         Layout.fillWidth: true
                         Layout.bottomMargin: 12
-                        model: modelController.stringFields
+                        model: modelController.availableFields
                         onCurrentTextChanged: Qt.callLater(refresh)
                         contentItem: Text {
                             leftPadding: 8
